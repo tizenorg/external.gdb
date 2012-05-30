@@ -7,6 +7,7 @@ Group: Development/Debuggers
 URL: http://gnu.org/software/gdb/
 Source: ftp://ftp.gnu.org/gnu/gdb/gdb-%{version}.tar.bz2
 Source101: gdb-rpmlintrc
+Source1001: packaging/gdb.manifest 
 Patch0: gdb-7.2-noreturn.patch
 Patch1: gdb-7.2-lib-order.patch
 
@@ -60,6 +61,7 @@ rm -f gdb/doc/*.info
 rm -f gdb/doc/*.info-*
 
 %build
+cp %{SOURCE1001} .
 rm -fr %{gdb_build}
 mkdir %{gdb_build}
 cd %{gdb_build}
@@ -123,6 +125,7 @@ rm -rf $RPM_BUILD_ROOT/%{_libdir}/lib{bfd*,opcodes*,iberty*,mmalloc*}
 rm -rf $RPM_BUILD_ROOT
 
 %files
+%manifest gdb.manifest
 %defattr(-,root,root)
 %doc COPYING COPYING.LIB README NEWS
 %{_bindir}/gcore
@@ -133,6 +136,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_datadir}/gdb
 
 %files server
+%manifest gdb.manifest
 %defattr(-,root,root)
 %{_bindir}/gdbserver
 %{_mandir}/*/gdbserver.1*
