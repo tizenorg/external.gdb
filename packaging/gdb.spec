@@ -83,7 +83,7 @@ export CFLAGS="$RPM_OPT_FLAGS"
 	--with-system-readline				\
 	--with-expat					\
 	--enable-tui					\
-	--without-python					\
+	--without-python				\
 	--without-libunwind				\
 	--enable-64-bit-bfd				\
 	--enable-static --disable-shared --enable-debug	\
@@ -119,6 +119,7 @@ rm -rf $RPM_BUILD_ROOT%{_datadir}/locale/
 rm -rf $RPM_BUILD_ROOT%{_infodir}/*
 rm -rf $RPM_BUILD_ROOT%{_includedir}
 rm -rf $RPM_BUILD_ROOT/%{_libdir}/lib{bfd*,opcodes*,iberty*,mmalloc*}
+
 
 %clean
 rm -rf $RPM_BUILD_ROOT
