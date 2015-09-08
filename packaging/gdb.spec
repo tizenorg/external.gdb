@@ -1,12 +1,13 @@
 Summary: A GNU source-level debugger for C, C++, Java and other languages
 Name: gdb
 Version: 7.2
-Release: 1
-License: GPLv3+
+Release: 2
+License: GPL-3.0+
 Group: Development/Debuggers
 URL: http://gnu.org/software/gdb/
 Source: ftp://ftp.gnu.org/gnu/gdb/gdb-%{version}.tar.bz2
 Source101: gdb-rpmlintrc
+Source1001: gdb.manifest
 Patch0: gdb-7.2-noreturn.patch
 Patch1: gdb-7.2-lib-order.patch
 
@@ -63,6 +64,7 @@ rm -f gdb/doc/*.info-*
 rm -fr %{gdb_build}
 mkdir %{gdb_build}
 cd %{gdb_build}
+cp %{SOURCE1001} $RPM_BUILD_DIR/%{gdb_src}
 
 export CFLAGS="$RPM_OPT_FLAGS"
 
@@ -81,7 +83,7 @@ export CFLAGS="$RPM_OPT_FLAGS"
 	--with-system-readline				\
 	--with-expat					\
 	--enable-tui					\
-	--without-python					\
+	--without-python				\
 	--without-libunwind				\
 	--enable-64-bit-bfd				\
 	--enable-static --disable-shared --enable-debug	\
@@ -123,6 +125,7 @@ rm -rf $RPM_BUILD_ROOT/%{_libdir}/lib{bfd*,opcodes*,iberty*,mmalloc*}
 rm -rf $RPM_BUILD_ROOT
 
 %files
+%manifest gdb.manifest
 %defattr(-,root,root)
 %doc COPYING COPYING.LIB README NEWS
 %{_bindir}/gcore
@@ -133,6 +136,7 @@ rm -rf $RPM_BUILD_ROOT
 %{_datadir}/gdb
 
 %files server
+%manifest gdb.manifest
 %defattr(-,root,root)
 %{_bindir}/gdbserver
 %{_mandir}/*/gdbserver.1*
