@@ -1,7 +1,6 @@
 /* Serial interface for raw TCP connections on Un*x like systems.
 
-   Copyright (C) 1992, 1993, 1994, 1995, 1996, 1998, 1999, 2001, 2005, 2006,
-   2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 1992-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -25,21 +24,24 @@
 #include "gdbcmd.h"
 #include "cli/cli-decode.h"
 #include "cli/cli-setshow.h"
+#include "filestuff.h"
 
 #include <sys/types.h>
 
 #ifdef HAVE_SYS_FILIO_H
-#include <sys/filio.h>  /* For FIONBIO. */
+#include <sys/filio.h>  /* For FIONBIO.  */
 #endif
 #ifdef HAVE_SYS_IOCTL_H
-#include <sys/ioctl.h>  /* For FIONBIO. */
+#include <sys/ioctl.h>  /* For FIONBIO.  */
 #endif
 
 #include <sys/time.h>
 
 #ifdef USE_WIN32API
 #include <winsock2.h>
+#ifndef ETIMEDOUT
 #define ETIMEDOUT WSAETIMEDOUT
+#endif
 #define close(fd) closesocket (fd)
 #define ioctl ioctlsocket
 #else
@@ -51,7 +53,7 @@
 #endif
 
 #include <signal.h>
-#include "gdb_string.h"
+#include <string.h>
 #include "gdb_select.h"
 
 #ifndef HAVE_SOCKLEN_T
@@ -71,9 +73,9 @@ static int tcp_auto_retry = 1;
 
 /* Timeout period for connections, in seconds.  */
 
-static int tcp_retry_limit = 15;
+static unsigned int tcp_retry_limit = 15;
 
-/* how many times per second to poll deprecated_ui_loop_hook */
+/* How many times per second to poll deprecated_ui_loop_hook.  */
 
 #define POLL_INTERVAL 5
 
@@ -82,7 +84,7 @@ static int tcp_retry_limit = 15;
    Returns -1 on timeout or interrupt, otherwise the value of select.  */
 
 static int
-wait_for_connect (struct serial *scb, int *polls)
+wait_for_connect (struct serial *scb, unsigned int *polls)
 {
   struct timeval t;
   int n;
@@ -149,7 +151,7 @@ wait_for_connect (struct serial *scb, int *polls)
   return n;
 }
 
-/* Open a tcp socket */
+/* Open a tcp socket.  */
 
 int
 net_open (struct serial *scb, const char *name)
@@ -164,7 +166,7 @@ net_open (struct serial *scb, const char *name)
 #else
   int ioarg;
 #endif
-  int polls = 0;
+  unsigned int polls = 0;
 
   use_udp = 0;
   if (strncmp (name, "udp:", 4) == 0)
@@ -178,14 +180,15 @@ net_open (struct serial *scb, const char *name)
   port_str = strchr (name, ':');
 
   if (!port_str)
-    error (_("net_open: No colon in host name!"));	   /* Shouldn't ever happen */
+    error (_("net_open: No colon in host name!"));  /* Shouldn't ever
+						       happen.  */
 
   tmp = min (port_str - name, (int) sizeof hostname - 1);
-  strncpy (hostname, name, tmp);	/* Don't want colon */
-  hostname[tmp] = '\000';	/* Tie off host name */
+  strncpy (hostname, name, tmp);	/* Don't want colon.  */
+  hostname[tmp] = '\000';	/* Tie off host name.  */
   port = atoi (port_str + 1);
 
-  /* default hostname is localhost */
+  /* Default hostname is localhost.  */
   if (!hostname[0])
     strcpy (hostname, "localhost");
 
@@ -205,18 +208,19 @@ net_open (struct serial *scb, const char *name)
  retry:
 
   if (use_udp)
-    scb->fd = socket (PF_INET, SOCK_DGRAM, 0);
+    scb->fd = gdb_socket_cloexec (PF_INET, SOCK_DGRAM, 0);
   else
-    scb->fd = socket (PF_INET, SOCK_STREAM, 0);
+    scb->fd = gdb_socket_cloexec (PF_INET, SOCK_STREAM, 0);
 
   if (scb->fd == -1)
     return -1;
   
-  /* set socket nonblocking */
+  /* Set socket nonblocking.  */
   ioarg = 1;
   ioctl (scb->fd, FIONBIO, &ioarg);
 
-  /* Use Non-blocking connect.  connect() will return 0 if connected already. */
+  /* Use Non-blocking connect.  connect() will return 0 if connected
+     already.  */
   n = connect (scb->fd, (struct sockaddr *) &sockaddr, sizeof (sockaddr));
 
   if (n < 0)
@@ -256,7 +260,7 @@ net_open (struct serial *scb, const char *name)
 	  return -1;
 	}
 
-      /* looks like we need to wait for the connect */
+      /* Looks like we need to wait for the connect.  */
       do 
 	{
 	  n = wait_for_connect (scb, &polls);
@@ -269,7 +273,7 @@ net_open (struct serial *scb, const char *name)
 	}
     }
 
-  /* Got something.  Is it an error? */
+  /* Got something.  Is it an error?  */
   {
     int res, err;
     socklen_t len;
@@ -301,13 +305,13 @@ net_open (struct serial *scb, const char *name)
       }
   } 
 
-  /* turn off nonblocking */
+  /* Turn off nonblocking.  */
   ioarg = 0;
   ioctl (scb->fd, FIONBIO, &ioarg);
 
   if (use_udp == 0)
     {
-      /* Disable Nagle algorithm. Needed in some cases. */
+      /* Disable Nagle algorithm.  Needed in some cases.  */
       tmp = 1;
       setsockopt (scb->fd, IPPROTO_TCP, TCP_NODELAY,
 		  (char *)&tmp, sizeof (tmp));
@@ -335,7 +339,10 @@ net_close (struct serial *scb)
 int
 net_read_prim (struct serial *scb, size_t count)
 {
-  return recv (scb->fd, scb->buf, count, 0);
+  /* Need to cast to silence -Wpointer-sign on MinGW, as Winsock's
+     'recv' takes 'char *' as second argument, while 'scb->buf' is
+     'unsigned char *'.  */
+  return recv (scb->fd, (void *) scb->buf, count, 0);
 }
 
 int
@@ -347,7 +354,7 @@ net_write_prim (struct serial *scb, const void *buf, size_t count)
 int
 ser_tcp_send_break (struct serial *scb)
 {
-  /* Send telnet IAC and BREAK characters. */
+  /* Send telnet IAC and BREAK characters.  */
   return (serial_write (scb, "\377\363", 2));
 }
 
@@ -365,6 +372,36 @@ show_tcp_cmd (char *args, int from_tty)
   help_list (tcp_show_cmdlist, "show tcp ", -1, gdb_stdout);
 }
 
+#ifndef USE_WIN32API
+
+/* The TCP ops.  */
+
+static const struct serial_ops tcp_ops =
+{
+  "tcp",
+  net_open,
+  net_close,
+  NULL,
+  ser_base_readchar,
+  ser_base_write,
+  ser_base_flush_output,
+  ser_base_flush_input,
+  ser_tcp_send_break,
+  ser_base_raw,
+  ser_base_get_tty_state,
+  ser_base_copy_tty_state,
+  ser_base_set_tty_state,
+  ser_base_print_tty_state,
+  ser_base_noflush_set_tty_state,
+  ser_base_setbaudrate,
+  ser_base_setstopbits,
+  ser_base_drain_output,
+  ser_base_async,
+  net_read_prim,
+  net_write_prim
+};
+
+#endif /* USE_WIN32API */
 
 void
 _initialize_ser_tcp (void)
@@ -373,31 +410,7 @@ _initialize_ser_tcp (void)
   /* Do nothing; the TCP serial operations will be initialized in
      ser-mingw.c.  */
 #else
-  struct serial_ops *ops;
-
-  ops = XMALLOC (struct serial_ops);
-  memset (ops, 0, sizeof (struct serial_ops));
-  ops->name = "tcp";
-  ops->next = 0;
-  ops->open = net_open;
-  ops->close = net_close;
-  ops->readchar = ser_base_readchar;
-  ops->write = ser_base_write;
-  ops->flush_output = ser_base_flush_output;
-  ops->flush_input = ser_base_flush_input;
-  ops->send_break = ser_tcp_send_break;
-  ops->go_raw = ser_base_raw;
-  ops->get_tty_state = ser_base_get_tty_state;
-  ops->set_tty_state = ser_base_set_tty_state;
-  ops->print_tty_state = ser_base_print_tty_state;
-  ops->noflush_set_tty_state = ser_base_noflush_set_tty_state;
-  ops->setbaudrate = ser_base_setbaudrate;
-  ops->setstopbits = ser_base_setstopbits;
-  ops->drain_output = ser_base_drain_output;
-  ops->async = ser_base_async;
-  ops->read_prim = net_read_prim;
-  ops->write_prim = net_write_prim;
-  serial_add_interface (ops);
+  serial_add_interface (&tcp_ops);
 #endif /* USE_WIN32API */
 
   add_prefix_cmd ("tcp", class_maintenance, set_tcp_cmd, _("\
@@ -420,8 +433,11 @@ Show auto-retry on socket connect"),
 
   add_setshow_uinteger_cmd ("connect-timeout", class_obscure,
 			    &tcp_retry_limit, _("\
-Set timeout limit for socket connection"), _("\
-Show timeout limit for socket connection"),
-			   NULL, NULL, NULL,
-			   &tcp_set_cmdlist, &tcp_show_cmdlist);
+Set timeout limit in seconds for socket connection"), _("\
+Show timeout limit in seconds for socket connection"), _("\
+If set to \"unlimited\", GDB will keep attempting to establish a\n\
+connection forever, unless interrupted with Ctrl-c.\n\
+The default is 15 seconds."),
+			    NULL, NULL,
+			    &tcp_set_cmdlist, &tcp_show_cmdlist);
 }

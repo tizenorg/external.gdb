@@ -1,6 +1,6 @@
 /* Inline frame unwinder for GDB.
 
-   Copyright (C) 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2008-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -18,6 +18,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 #include "defs.h"
+#include "inline-frame.h"
 #include "addrmap.h"
 #include "block.h"
 #include "frame-unwind.h"
@@ -25,6 +26,7 @@
 #include "regcache.h"
 #include "symtab.h"
 #include "vec.h"
+#include "frame.h"
 
 #include "gdb_assert.h"
 
@@ -126,7 +128,9 @@ clear_inline_frame_state (ptid_t ptid)
       VEC (inline_state_s) *new_states = NULL;
       int pid = ptid_get_pid (ptid);
 
-      for (ix = 0; VEC_iterate (inline_state_s, inline_states, ix, state); ix++)
+      for (ix = 0;
+	   VEC_iterate (inline_state_s, inline_states, ix, state);
+	   ix++)
 	if (pid != ptid_get_pid (state->ptid))
 	  VEC_safe_push (inline_state_s, new_states, state);
       VEC_free (inline_state_s, inline_states);
@@ -151,11 +155,11 @@ inline_frame_this_id (struct frame_info *this_frame,
 
   /* In order to have a stable frame ID for a given inline function,
      we must get the stack / special addresses from the underlying
-     real frame's this_id method.  So we must call get_prev_frame.
-     Because we are inlined into some function, there must be previous
-     frames, so this is safe - as long as we're careful not to
-     create any cycles.  */
-  *this_id = get_frame_id (get_prev_frame (this_frame));
+     real frame's this_id method.  So we must call
+     get_prev_frame_always.  Because we are inlined into some
+     function, there must be previous frames, so this is safe - as
+     long as we're careful not to create any cycles.  */
+  *this_id = get_frame_id (get_prev_frame_always (this_frame));
 
   /* We need a valid frame ID, so we need to be based on a valid
      frame.  FSF submission NOTE: this would be a good assertion to
@@ -175,7 +179,7 @@ inline_frame_this_id (struct frame_info *this_frame,
   func = get_frame_function (this_frame);
   gdb_assert (func != NULL);
   (*this_id).code_addr = BLOCK_START (SYMBOL_BLOCK_VALUE (func));
-  (*this_id).inline_depth++;
+  (*this_id).artificial_depth++;
 }
 
 static struct value *
@@ -256,15 +260,14 @@ inline_frame_sniffer (const struct frame_unwind *self,
   return 1;
 }
 
-const struct frame_unwind inline_frame_unwinder = {
+const struct frame_unwind inline_frame_unwind = {
   INLINE_FRAME,
+  default_frame_unwind_stop_reason,
   inline_frame_this_id,
   inline_frame_prev_register,
   NULL,
   inline_frame_sniffer
 };
-
-const struct frame_unwind *const inline_frame_unwind = &inline_frame_unwinder;
 
 /* Return non-zero if BLOCK, an inlined function block containing PC,
    has a group of contiguous instructions starting at PC (but not
@@ -287,7 +290,7 @@ block_starting_point_at (CORE_ADDR pc, struct block *block)
   if (new_block == block || contained_in (new_block, block))
     return 0;
 
-  /* The immediately preceeding address belongs to a different block,
+  /* The immediately preceding address belongs to a different block,
      which is not a child of this one.  Treat this as an entrance into
      BLOCK.  */
   return 1;

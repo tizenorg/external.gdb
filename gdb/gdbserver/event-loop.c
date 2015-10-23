@@ -1,6 +1,5 @@
 /* Event loop machinery for the remote server for GDB.
-   Copyright (C) 1999, 2000, 2001, 2002, 2005, 2006, 2007, 2008, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 1999-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -20,6 +19,7 @@
 /* Based on src/gdb/event-loop.c.  */
 
 #include "server.h"
+#include "queue.h"
 
 #include <sys/types.h>
 #include <string.h>
@@ -34,12 +34,10 @@
 #include <errno.h>
 #endif
 
-#ifdef HAVE_UNISTD_H
 #include <unistd.h>
-#endif
 
 typedef struct gdb_event gdb_event;
-typedef int (event_handler_func) (int);
+typedef int (event_handler_func) (gdb_fildes_t);
 
 /* Tell create_file_handler what events we are interested in.  */
 
@@ -47,7 +45,8 @@ typedef int (event_handler_func) (int);
 #define GDB_WRITABLE	(1<<2)
 #define GDB_EXCEPTION	(1<<3)
 
-/* Events are queued by calling async_queue_event and serviced later
+/* Events are queued by calling 'QUEUE_enque (gdb_event_p, event_queue,
+   file_event_ptr)' and serviced later
    on by do_one_event.  An event can be, for instance, a file
    descriptor becoming ready to be read.  Servicing an event simply
    means that the procedure PROC will be called.  We have 2 queues,
@@ -58,17 +57,14 @@ typedef int (event_handler_func) (int);
    descriptor whose state change generated the event, plus doing other
    cleanups and such.  */
 
-struct gdb_event
+typedef struct gdb_event
   {
     /* Procedure to call to service this event.  */
     event_handler_func *proc;
 
     /* File descriptor that is ready.  */
-    int fd;
-
-    /* Next in list of events or NULL.  */
-    struct gdb_event *next_event;
-  };
+    gdb_fildes_t fd;
+  } *gdb_event_p;
 
 /* Information about each file descriptor we register with the event
    loop.  */
@@ -76,7 +72,7 @@ struct gdb_event
 typedef struct file_handler
   {
     /* File descriptor.  */
-    int fd;
+    gdb_fildes_t fd;
 
     /* Events we want to monitor.  */
     int mask;
@@ -98,25 +94,9 @@ typedef struct file_handler
   }
 file_handler;
 
-/* Event queue:
-
-   Events can be inserted at the front of the queue or at the end of
-   the queue.  Events will be extracted from the queue for processing
-   starting from the head.  Therefore, events inserted at the head of
-   the queue will be processed in a last in first out fashion, while
-   those inserted at the tail of the queue will be processed in a
-   first in first out manner.  All the fields are NULL if the queue is
-   empty.  */
-
-static struct
-  {
-    /* The first pending event.  */
-    gdb_event *first_event;
-
-    /* The last pending event.  */
-    gdb_event *last_event;
-  }
-event_queue;
+DECLARE_QUEUE_P(gdb_event_p);
+static QUEUE(gdb_event_p) *event_queue = NULL;
+DEFINE_QUEUE_P(gdb_event_p);
 
 /* Gdb_notifier is just a list of file descriptors gdb is interested
    in.  These are the input file descriptor, and the target file
@@ -171,25 +151,18 @@ static struct
   }
 callback_list;
 
-/* Insert an event object into the gdb event queue.
-
-   EVENT_PTR points to the event to be inserted into the queue.  The
-   caller must allocate memory for the event.  It is freed after the
-   event has ben handled.  Events in the queue will be processed head
-   to tail, therefore, events will be processed first in first
-   out.  */
+/* Free EVENT.  */
 
 static void
-async_queue_event (gdb_event *event_ptr)
+gdb_event_xfree (struct gdb_event *event)
 {
-  /* The event will become the new last_event.  */
+  xfree (event);
+}
 
-  event_ptr->next_event = NULL;
-  if (event_queue.first_event == NULL)
-    event_queue.first_event = event_ptr;
-  else
-    event_queue.last_event->next_event = event_ptr;
-  event_queue.last_event = event_ptr;
+void
+initialize_event_loop (void)
+{
+  event_queue = QUEUE_alloc (gdb_event_p, gdb_event_xfree);
 }
 
 /* Process one event.  If an event was processed, 1 is returned
@@ -200,46 +173,18 @@ async_queue_event (gdb_event *event_ptr)
 static int
 process_event (void)
 {
-  gdb_event *event_ptr, *prev_ptr;
-  event_handler_func *proc;
-  int fd;
-
-  /* Look in the event queue to find an event that is ready
-     to be processed.  */
-
-  for (event_ptr = event_queue.first_event;
-       event_ptr != NULL;
-       event_ptr = event_ptr->next_event)
+  /* Let's get rid of the event from the event queue.  We need to
+     do this now because while processing the event, since the
+     proc function could end up jumping out to the caller of this
+     function.  In that case, we would have on the event queue an
+     event which has been processed, but not deleted.  */
+  if (!QUEUE_is_empty (gdb_event_p, event_queue))
     {
-      /* Call the handler for the event.  */
+      gdb_event *event_ptr = QUEUE_deque (gdb_event_p, event_queue);
+      event_handler_func *proc = event_ptr->proc;
+      gdb_fildes_t fd = event_ptr->fd;
 
-      proc = event_ptr->proc;
-      fd = event_ptr->fd;
-
-      /* Let's get rid of the event from the event queue.  We need to
-         do this now because while processing the event, since the
-         proc function could end up jumping out to the caller of this
-         function.  In that case, we would have on the event queue an
-         event which has been processed, but not deleted.  */
-
-      if (event_queue.first_event == event_ptr)
-	{
-	  event_queue.first_event = event_ptr->next_event;
-	  if (event_ptr->next_event == NULL)
-	    event_queue.last_event = NULL;
-	}
-      else
-	{
-	  prev_ptr = event_queue.first_event;
-	  while (prev_ptr->next_event != event_ptr)
-	    prev_ptr = prev_ptr->next_event;
-
-	  prev_ptr->next_event = event_ptr->next_event;
-	  if (event_ptr->next_event == NULL)
-	    event_queue.last_event = prev_ptr;
-	}
-      free (event_ptr);
-
+      gdb_event_xfree (event_ptr);
       /* Now call the procedure associated with the event.  */
       if ((*proc) (fd))
 	return -1;
@@ -332,7 +277,7 @@ process_callback (void)
    occurs for FD.  CLIENT_DATA is the argument to pass to PROC.  */
 
 static void
-create_file_handler (int fd, int mask, handler_func *proc,
+create_file_handler (gdb_fildes_t fd, int mask, handler_func *proc,
 		     gdb_client_data client_data)
 {
   file_handler *file_ptr;
@@ -382,7 +327,8 @@ create_file_handler (int fd, int mask, handler_func *proc,
 /* Wrapper function for create_file_handler.  */
 
 void
-add_file_handler (int fd, handler_func *proc, gdb_client_data client_data)
+add_file_handler (gdb_fildes_t fd,
+		  handler_func *proc, gdb_client_data client_data)
 {
   create_file_handler (fd, GDB_READABLE | GDB_EXCEPTION, proc, client_data);
 }
@@ -391,7 +337,7 @@ add_file_handler (int fd, handler_func *proc, gdb_client_data client_data)
    i.e. we don't care anymore about events on the FD.  */
 
 void
-delete_file_handler (int fd)
+delete_file_handler (gdb_fildes_t fd)
 {
   file_handler *file_ptr, *prev_ptr = NULL;
   int i;
@@ -454,7 +400,7 @@ delete_file_handler (int fd)
    event in the front of the event queue.  */
 
 static int
-handle_file_event (int event_file_desc)
+handle_file_event (gdb_fildes_t event_file_desc)
 {
   file_handler *file_ptr;
   int mask;
@@ -471,8 +417,8 @@ handle_file_event (int event_file_desc)
 
 	  if (file_ptr->ready_mask & GDB_EXCEPTION)
 	    {
-	      fprintf (stderr, "Exception condition detected on fd %d\n",
-		       file_ptr->fd);
+	      fprintf (stderr, "Exception condition detected on fd %s\n",
+		       pfildes (file_ptr->fd));
 	      file_ptr->error = 1;
 	    }
 	  else
@@ -502,7 +448,7 @@ handle_file_event (int event_file_desc)
    associated to FD when it was registered with the event loop.  */
 
 static gdb_event *
-create_file_event (int fd)
+create_file_event (gdb_fildes_t fd)
 {
   gdb_event *file_event_ptr;
 
@@ -522,7 +468,6 @@ static int
 wait_for_event (void)
 {
   file_handler *file_ptr;
-  gdb_event *file_event_ptr;
   int num_found = 0;
 
   /* Make sure all output is done before getting another event.  */
@@ -580,8 +525,9 @@ wait_for_event (void)
 
       if (file_ptr->ready_mask == 0)
 	{
-	  file_event_ptr = create_file_event (file_ptr->fd);
-	  async_queue_event (file_event_ptr);
+	  gdb_event *file_event_ptr = create_file_event (file_ptr->fd);
+
+	  QUEUE_enque (gdb_event_p, event_queue, file_event_ptr);
 	}
       file_ptr->ready_mask = mask;
     }

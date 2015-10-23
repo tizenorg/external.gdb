@@ -1,6 +1,5 @@
 /* Remote target system call support.
-   Copyright 1997, 1998, 2002, 2004, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright 1997-2014 Free Software Foundation, Inc.
    Contributed by Cygnus Solutions.
 
    This file is part of GDB.
@@ -76,13 +75,9 @@ char *simulator_sysroot = "";
 /* Utility of cb_syscall to fetch a path name or other string from the target.
    The result is 0 for success or a host errno value.  */
 
-static int
-get_string (cb, sc, buf, buflen, addr)
-     host_callback *cb;
-     CB_SYSCALL *sc;
-     char *buf;
-     int buflen;
-     TADDR addr;
+int
+cb_get_string (host_callback *cb, CB_SYSCALL *sc, char *buf, int buflen,
+	       TADDR addr)
 {
   char *p, *pend;
 
@@ -93,7 +88,7 @@ get_string (cb, sc, buf, buflen, addr)
 	 path name along with the syscall request, and cache the file
 	 name somewhere (or otherwise tweak this as desired).  */
       unsigned int count = (*sc->read_mem) (cb, sc, addr, p, 1);
-				    
+
       if (count != 1)
 	return EINVAL;
       if (*p == 0)
@@ -111,17 +106,13 @@ get_string (cb, sc, buf, buflen, addr)
    If an error occurs, no buffer is left malloc'd.  */
 
 static int
-get_path (cb, sc, addr, bufp)
-     host_callback *cb;
-     CB_SYSCALL *sc;
-     TADDR addr;
-     char **bufp;
+get_path (host_callback *cb, CB_SYSCALL *sc, TADDR addr, char **bufp)
 {
   char *buf = xmalloc (MAX_PATH_LEN);
   int result;
   int sysroot_len = strlen (simulator_sysroot);
 
-  result = get_string (cb, sc, buf, MAX_PATH_LEN - sysroot_len, addr);
+  result = cb_get_string (cb, sc, buf, MAX_PATH_LEN - sysroot_len, addr);
   if (result == 0)
     {
       /* Prepend absolute paths with simulator_sysroot.  Relative paths
@@ -148,9 +139,7 @@ get_path (cb, sc, addr, bufp)
 /* Perform a system call on behalf of the target.  */
 
 CB_RC
-cb_syscall (cb, sc)
-     host_callback *cb;
-     CB_SYSCALL *sc;
+cb_syscall (host_callback *cb, CB_SYSCALL *sc)
 {
   TWORD result = 0, errcode = 0;
 
@@ -345,12 +334,12 @@ cb_syscall (cb, sc)
 		errcode = EINVAL;
 		goto FinishSyscall;
 	      }
-	    if (cb_is_stdout(cb, fd))
+	    if (cb_is_stdout (cb, fd))
 	      {
 		result = (int) (*cb->write_stdout) (cb, buf, bytes_read);
 		(*cb->flush_stdout) (cb);
 	      }
-	    else if (cb_is_stderr(cb, fd))
+	    else if (cb_is_stderr (cb, fd))
 	      {
 		result = (int) (*cb->write_stderr) (cb, buf, bytes_read);
 		(*cb->flush_stderr) (cb);

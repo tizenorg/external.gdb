@@ -1,5 +1,5 @@
 /* Cell SPU GNU/Linux support -- shared library handling.
-   Copyright (C) 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2009-2014 Free Software Foundation, Inc.
 
    Contributed by Ulrich Weigand <uweigand@de.ibm.com>.
 
@@ -19,10 +19,11 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 #include "defs.h"
+#include "solib-spu.h"
 #include "gdbcore.h"
-#include "gdb_string.h"
+#include <string.h>
 #include "gdb_assert.h"
-#include "gdb_stat.h"
+#include <sys/stat.h>
 #include "arch-utils.h"
 #include "bfd.h"
 #include "symtab.h"
@@ -35,6 +36,7 @@
 #include "breakpoint.h"
 #include "gdbthread.h"
 #include "exceptions.h"
+#include "gdb_bfd.h"
 
 #include "spu-tdep.h"
 
@@ -85,13 +87,13 @@ spu_skip_standalone_loader (void)
 	 this will step past the first instruction of the stand-alone SPE
 	 executable loader, but we don't care about that.  */
 
-      inferior_thread ()->in_infcall = 1;   /* Suppress MI messages.  */
+      inferior_thread ()->control.in_infcall = 1; /* Suppress MI messages.  */
 
-      target_resume (inferior_ptid, 1, TARGET_SIGNAL_0);
+      target_resume (inferior_ptid, 1, GDB_SIGNAL_0);
       target_wait (minus_one_ptid, &ws, 0);
       set_executing (minus_one_ptid, 0);
 
-      inferior_thread ()->in_infcall = 0;
+      inferior_thread ()->control.in_infcall = 0;
     }
 }
 
@@ -123,7 +125,7 @@ append_ocl_sos (struct so_list **link_ptr)
 		  struct so_list *new;
 
 		  /* Allocate so_list structure.  */
-		  new = XZALLOC (struct so_list);
+		  new = XCNEW (struct so_list);
 
 		  /* Encode FD and object ID in path name.  */
 		  xsnprintf (new->so_name, sizeof new->so_name, "@%s <%d>",
@@ -156,11 +158,11 @@ append_ocl_sos (struct so_list **link_ptr)
 static struct so_list *
 spu_current_sos (void)
 {
-  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch);
+  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch ());
   struct so_list *head;
   struct so_list **link_ptr;
 
-  char buf[MAX_SPE_FD * 4];
+  gdb_byte buf[MAX_SPE_FD * 4];
   int i, size;
 
   /* First, retrieve the SVR4 shared library list.  */
@@ -207,7 +209,7 @@ spu_current_sos (void)
 	 yet.  Skip such entries; we'll be back for them later.  */
       xsnprintf (annex, sizeof annex, "%d/object-id", fd);
       len = target_read (&current_target, TARGET_OBJECT_SPU, annex,
-			 id, 0, sizeof id);
+			 (gdb_byte *) id, 0, sizeof id);
       if (len <= 0 || len >= sizeof id)
 	continue;
       id[len] = 0;
@@ -215,7 +217,7 @@ spu_current_sos (void)
 	continue;
 
       /* Allocate so_list structure.  */
-      new = XZALLOC (struct so_list);
+      new = XCNEW (struct so_list);
 
       /* Encode FD and object ID in path name.  Choose the name so as not
 	 to conflict with any (normal) SVR4 library path name.  */
@@ -227,7 +229,7 @@ spu_current_sos (void)
       link_ptr = &new->next;
     }
 
-  /* Append OpenCL sos. */
+  /* Append OpenCL sos.  */
   append_ocl_sos (link_ptr);
 
   return head;
@@ -284,7 +286,9 @@ static int
 spu_bfd_iovec_close (bfd *nbfd, void *stream)
 {
   xfree (stream);
-  return 1;
+
+  /* Zero means success.  */
+  return 0;
 }
 
 static file_ptr
@@ -324,16 +328,16 @@ spu_bfd_fopen (char *name, CORE_ADDR addr)
   CORE_ADDR *open_closure = xmalloc (sizeof (CORE_ADDR));
   *open_closure = addr;
 
-  nbfd = bfd_openr_iovec (xstrdup (name), "elf32-spu",
-                          spu_bfd_iovec_open, open_closure,
-                          spu_bfd_iovec_pread, spu_bfd_iovec_close,
-			  spu_bfd_iovec_stat);
+  nbfd = gdb_bfd_openr_iovec (name, "elf32-spu",
+			      spu_bfd_iovec_open, open_closure,
+			      spu_bfd_iovec_pread, spu_bfd_iovec_close,
+			      spu_bfd_iovec_stat);
   if (!nbfd)
     return NULL;
 
   if (!bfd_check_format (nbfd, bfd_object))
     {
-      bfd_close (nbfd);
+      gdb_bfd_unref (nbfd);
       return NULL;
     }
 
@@ -404,7 +408,7 @@ spu_lookup_lib_symbol (const struct objfile *objfile,
 static int
 spu_enable_break (struct objfile *objfile)
 {
-  struct minimal_symbol *spe_event_sym = NULL;
+  struct bound_minimal_symbol spe_event_sym;
 
   /* The libspe library will call __spe_context_update_event whenever any
      SPE context is allocated or destroyed.  */
@@ -412,13 +416,13 @@ spu_enable_break (struct objfile *objfile)
 					 NULL, objfile);
 
   /* Place a solib_event breakpoint on the symbol.  */
-  if (spe_event_sym)
+  if (spe_event_sym.minsym)
     {
-      CORE_ADDR addr = SYMBOL_VALUE_ADDRESS (spe_event_sym);
+      CORE_ADDR addr = BMSYMBOL_VALUE_ADDRESS (spe_event_sym);
 
-      addr = gdbarch_convert_from_func_ptr_addr (target_gdbarch, addr,
+      addr = gdbarch_convert_from_func_ptr_addr (target_gdbarch (), addr,
                                                  &current_target);
-      create_solib_event_breakpoint (target_gdbarch, addr);
+      create_solib_event_breakpoint (target_gdbarch (), addr);
       return 1;
     }
 
@@ -430,8 +434,8 @@ spu_enable_break (struct objfile *objfile)
 static void
 ocl_enable_break (struct objfile *objfile)
 {
-  struct minimal_symbol *event_sym = NULL;
-  struct minimal_symbol *addr_sym = NULL;
+  struct bound_minimal_symbol event_sym;
+  struct bound_minimal_symbol addr_sym;
 
   /* The OpenCL runtime on the SPU will call __opencl_program_update_event
      whenever an OpenCL program is loaded.  */
@@ -441,10 +445,10 @@ ocl_enable_break (struct objfile *objfile)
      at opencl_elf_image_address.  */
   addr_sym = lookup_minimal_symbol ("opencl_elf_image_address", NULL, objfile);
 
-  if (event_sym && addr_sym)
+  if (event_sym.minsym && addr_sym.minsym)
     {
       /* Place a solib_event breakpoint on the symbol.  */
-      CORE_ADDR event_addr = SYMBOL_VALUE_ADDRESS (event_sym);
+      CORE_ADDR event_addr = BMSYMBOL_VALUE_ADDRESS (event_sym);
       create_solib_event_breakpoint (get_objfile_arch (objfile), event_addr);
 
       /* Store the address of the symbol that will point to OpenCL program
@@ -455,7 +459,7 @@ ocl_enable_break (struct objfile *objfile)
 		  &objfile->objfile_obstack,
 		  objfile->sections_end - objfile->sections,
 		  CORE_ADDR);
-	  *ocl_program_addr_base = SYMBOL_VALUE_ADDRESS (addr_sym);
+	  *ocl_program_addr_base = BMSYMBOL_VALUE_ADDRESS (addr_sym);
 	  set_objfile_data (objfile, ocl_program_data_key,
 			    ocl_program_addr_base);
         }
@@ -540,6 +544,9 @@ spu_solib_loaded (struct so_list *so)
       ocl_enable_break (so->objfile);
     }
 }
+
+/* -Wmissing-prototypes */
+extern initialize_file_ftype _initialize_spu_solib;
 
 void
 _initialize_spu_solib (void)

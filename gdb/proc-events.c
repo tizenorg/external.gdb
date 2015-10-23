@@ -1,7 +1,6 @@
 /* Machine-independent support for SVR4 /proc (process file system)
 
-   Copyright (C) 1999, 2000, 2004, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 1999-2014 Free Software Foundation, Inc.
 
    Written by Michael Snyder at Cygnus Solutions.
    Based on work by Fred Fish, Stu Grossman, Geoff Noer, and others.
@@ -45,6 +44,8 @@
 #include <sys/fault.h>
 #endif
 
+#include "proc-utils.h"
+
 /* Much of the information used in the /proc interface, particularly
    for printing status information, is kept as tables of structures of
    the following form.  These tables can be used to map numeric values
@@ -61,51 +62,12 @@ struct trans
 
 /* Pretty print syscalls.  */
 
-/* Ugh -- UnixWare and Solaris spell these differently!  */
-
-#ifdef  SYS_lwpcreate
-#define SYS_lwp_create	SYS_lwpcreate
-#endif
-
-#ifdef  SYS_lwpexit
-#define SYS_lwp_exit SYS_lwpexit
-#endif
-
-#ifdef  SYS_lwpwait
-#define SYS_lwp_wait SYS_lwpwait
-#endif
-
-#ifdef  SYS_lwpself
-#define SYS_lwp_self SYS_lwpself
-#endif
-
-#ifdef  SYS_lwpinfo
-#define SYS_lwp_info SYS_lwpinfo
-#endif
-
-#ifdef  SYS_lwpprivate
-#define SYS_lwp_private SYS_lwpprivate
-#endif
-
-#ifdef  SYS_lwpkill
-#define SYS_lwp_kill SYS_lwpkill
-#endif
-
-#ifdef  SYS_lwpsuspend
-#define SYS_lwp_suspend SYS_lwpsuspend
-#endif
-
-#ifdef  SYS_lwpcontinue
-#define SYS_lwp_continue SYS_lwpcontinue
-#endif
-
-
 /* Syscall translation table.  */
 
 #define MAX_SYSCALLS 262	/* Pretty arbitrary.  */
 static char *syscall_table[MAX_SYSCALLS];
 
-void
+static void
 init_syscall_table (void)
 {
 #ifdef SYS_BSD_getime
@@ -1434,28 +1396,34 @@ proc_prettyprint_syscalls (sysset_t *sysset, int verbose)
 
 /* Prettyprint signals.  */
 
-/* Signal translation table.  */
+/* Signal translation table, ordered ANSI-standard signals first,
+   other signals second, with signals in each block ordered by their
+   numerical values on a typical POSIX platform.  */
 
 static struct trans signal_table[] = 
 {
   { 0,      "<no signal>", "no signal" }, 
+
+  /* SIGINT, SIGILL, SIGABRT, SIGFPE, SIGSEGV and SIGTERM
+     are ANSI-standard signals and are always available.  */
+
+  { SIGINT, "SIGINT", "Interrupt (rubout)" },
+  { SIGILL, "SIGILL", "Illegal instruction" },	/* not reset when caught */
+  { SIGABRT, "SIGABRT", "used by abort()" },	/* replaces SIGIOT */
+  { SIGFPE, "SIGFPE", "Floating point exception" },
+  { SIGSEGV, "SIGSEGV", "Segmentation violation" },
+  { SIGTERM, "SIGTERM", "Software termination signal from kill" },
+
+  /* All other signals need preprocessor conditionals.  */
+
 #ifdef SIGHUP
   { SIGHUP, "SIGHUP", "Hangup" },
-#endif
-#ifdef SIGINT
-  { SIGINT, "SIGINT", "Interrupt (rubout)" },
 #endif
 #ifdef SIGQUIT
   { SIGQUIT, "SIGQUIT", "Quit (ASCII FS)" },
 #endif
-#ifdef SIGILL
-  { SIGILL, "SIGILL", "Illegal instruction" },	/* not reset when caught */
-#endif
 #ifdef SIGTRAP
   { SIGTRAP, "SIGTRAP", "Trace trap" },		/* not reset when caught */
-#endif
-#ifdef SIGABRT
-  { SIGABRT, "SIGABRT", "used by abort()" },	/* replaces SIGIOT */
 #endif
 #ifdef SIGIOT
   { SIGIOT, "SIGIOT", "IOT instruction" },
@@ -1463,17 +1431,11 @@ static struct trans signal_table[] =
 #ifdef SIGEMT
   { SIGEMT, "SIGEMT", "EMT instruction" },
 #endif
-#ifdef SIGFPE
-  { SIGFPE, "SIGFPE", "Floating point exception" },
-#endif
 #ifdef SIGKILL
   { SIGKILL, "SIGKILL", "Kill" },	/* Solaris: cannot be caught/ignored */
 #endif
 #ifdef SIGBUS
   { SIGBUS, "SIGBUS", "Bus error" },
-#endif
-#ifdef SIGSEGV
-  { SIGSEGV, "SIGSEGV", "Segmentation violation" },
 #endif
 #ifdef SIGSYS
   { SIGSYS, "SIGSYS", "Bad argument to system call" },
@@ -1483,9 +1445,6 @@ static struct trans signal_table[] =
 #endif
 #ifdef SIGALRM
   { SIGALRM, "SIGALRM", "Alarm clock" },
-#endif
-#ifdef SIGTERM
-  { SIGTERM, "SIGTERM", "Software termination signal from kill" },
 #endif
 #ifdef SIGUSR1
   { SIGUSR1, "SIGUSR1", "User defined signal 1" },
@@ -1515,7 +1474,8 @@ static struct trans signal_table[] =
   { SIGIO, "SIGIO", "Socket I/O possible" },	/* alias for SIGPOLL */
 #endif
 #ifdef SIGSTOP
-  { SIGSTOP, "SIGSTOP", "Stop, not from tty" },	/* cannot be caught or ignored */
+  { SIGSTOP, "SIGSTOP", "Stop, not from tty" },	/* cannot be caught or
+						   ignored */
 #endif
 #ifdef SIGTSTP
   { SIGTSTP, "SIGTSTP", "User stop from tty" },

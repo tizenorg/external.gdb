@@ -1,6 +1,6 @@
 /* Definitions for targets which report shared library events.
 
-   Copyright (C) 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2007-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -26,9 +26,7 @@
 #include "vec.h"
 #include "solib-target.h"
 
-#include "gdb_string.h"
-
-DEF_VEC_O(CORE_ADDR);
+#include <string.h>
 
 /* Private data for each loaded library.  */
 struct lm_info
@@ -86,14 +84,14 @@ library_list_start_segment (struct gdb_xml_parser *parser,
 {
   VEC(lm_info_p) **list = user_data;
   struct lm_info *last = VEC_last (lm_info_p, *list);
-  ULONGEST *address_p = VEC_index (gdb_xml_value_s, attributes, 0)->value;
+  ULONGEST *address_p = xml_find_attribute (attributes, "address")->value;
   CORE_ADDR address = (CORE_ADDR) *address_p;
 
   if (last->section_bases != NULL)
     gdb_xml_error (parser,
 		   _("Library list with both segments and sections"));
 
-  VEC_safe_push (CORE_ADDR, last->segment_bases, &address);
+  VEC_safe_push (CORE_ADDR, last->segment_bases, address);
 }
 
 static void
@@ -103,14 +101,14 @@ library_list_start_section (struct gdb_xml_parser *parser,
 {
   VEC(lm_info_p) **list = user_data;
   struct lm_info *last = VEC_last (lm_info_p, *list);
-  ULONGEST *address_p = VEC_index (gdb_xml_value_s, attributes, 0)->value;
+  ULONGEST *address_p = xml_find_attribute (attributes, "address")->value;
   CORE_ADDR address = (CORE_ADDR) *address_p;
 
   if (last->segment_bases != NULL)
     gdb_xml_error (parser,
 		   _("Library list with both segments and sections"));
 
-  VEC_safe_push (CORE_ADDR, last->section_bases, &address);
+  VEC_safe_push (CORE_ADDR, last->section_bases, address);
 }
 
 /* Handle the start of a <library> element.  */
@@ -121,8 +119,8 @@ library_list_start_library (struct gdb_xml_parser *parser,
 			    void *user_data, VEC(gdb_xml_value_s) *attributes)
 {
   VEC(lm_info_p) **list = user_data;
-  struct lm_info *item = XZALLOC (struct lm_info);
-  const char *name = VEC_index (gdb_xml_value_s, attributes, 0)->value;
+  struct lm_info *item = XCNEW (struct lm_info);
+  const char *name = xml_find_attribute (attributes, "name")->value;
 
   item->name = xstrdup (name);
   VEC_safe_push (lm_info_p, *list, item);
@@ -150,7 +148,7 @@ library_list_start_list (struct gdb_xml_parser *parser,
 			 const struct gdb_xml_element *element,
 			 void *user_data, VEC(gdb_xml_value_s) *attributes)
 {
-  char *version = VEC_index (gdb_xml_value_s, attributes, 0)->value;
+  char *version = xml_find_attribute (attributes, "version")->value;
 
   if (strcmp (version, "1.0") != 0)
     gdb_xml_error (parser,
@@ -181,17 +179,17 @@ solib_target_free_library_list (void *p)
 /* The allowed elements and attributes for an XML library list.
    The root element is a <library-list>.  */
 
-const struct gdb_xml_attribute segment_attributes[] = {
+static const struct gdb_xml_attribute segment_attributes[] = {
   { "address", GDB_XML_AF_NONE, gdb_xml_parse_attr_ulongest, NULL },
   { NULL, GDB_XML_AF_NONE, NULL, NULL }
 };
 
-const struct gdb_xml_attribute section_attributes[] = {
+static const struct gdb_xml_attribute section_attributes[] = {
   { "address", GDB_XML_AF_NONE, gdb_xml_parse_attr_ulongest, NULL },
   { NULL, GDB_XML_AF_NONE, NULL, NULL }
 };
 
-const struct gdb_xml_element library_children[] = {
+static const struct gdb_xml_element library_children[] = {
   { "segment", segment_attributes, NULL,
     GDB_XML_EF_REPEATABLE | GDB_XML_EF_OPTIONAL,
     library_list_start_segment, NULL },
@@ -201,24 +199,24 @@ const struct gdb_xml_element library_children[] = {
   { NULL, NULL, NULL, GDB_XML_EF_NONE, NULL, NULL }
 };
 
-const struct gdb_xml_attribute library_attributes[] = {
+static const struct gdb_xml_attribute library_attributes[] = {
   { "name", GDB_XML_AF_NONE, NULL, NULL },
   { NULL, GDB_XML_AF_NONE, NULL, NULL }
 };
 
-const struct gdb_xml_element library_list_children[] = {
+static const struct gdb_xml_element library_list_children[] = {
   { "library", library_attributes, library_children,
     GDB_XML_EF_REPEATABLE | GDB_XML_EF_OPTIONAL,
     library_list_start_library, library_list_end_library },
   { NULL, NULL, NULL, GDB_XML_EF_NONE, NULL, NULL }
 };
 
-const struct gdb_xml_attribute library_list_attributes[] = {
+static const struct gdb_xml_attribute library_list_attributes[] = {
   { "version", GDB_XML_AF_NONE, NULL, NULL },
   { NULL, GDB_XML_AF_NONE, NULL, NULL }
 };
 
-const struct gdb_xml_element library_list_elements[] = {
+static const struct gdb_xml_element library_list_elements[] = {
   { "library-list", library_list_attributes, library_list_children,
     GDB_XML_EF_NONE, library_list_start_list, NULL },
   { NULL, NULL, NULL, GDB_XML_EF_NONE, NULL, NULL }
@@ -227,24 +225,20 @@ const struct gdb_xml_element library_list_elements[] = {
 static VEC(lm_info_p) *
 solib_target_parse_libraries (const char *library)
 {
-  struct gdb_xml_parser *parser;
   VEC(lm_info_p) *result = NULL;
-  struct cleanup *before_deleting_result, *back_to;
+  struct cleanup *back_to = make_cleanup (solib_target_free_library_list,
+					  &result);
 
-  back_to = make_cleanup (null_cleanup, NULL);
-  parser = gdb_xml_create_parser_and_cleanup (_("target library list"),
-					      library_list_elements, &result);
-  gdb_xml_use_dtd (parser, "library-list.dtd");
-
-  before_deleting_result = make_cleanup (solib_target_free_library_list,
-					 &result);
-
-  if (gdb_xml_parse (parser, library) == 0)
-    /* Parsed successfully, don't need to delete the result.  */
-    discard_cleanups (before_deleting_result);
+  if (gdb_xml_parse_quick (_("target library list"), "library-list.dtd",
+			   library_list_elements, library, &result) == 0)
+    {
+      /* Parsed successfully, keep the result.  */
+      discard_cleanups (back_to);
+      return result;
+    }
 
   do_cleanups (back_to);
-  return result;
+  return NULL;
 }
 #endif
 
@@ -252,7 +246,8 @@ static struct so_list *
 solib_target_current_sos (void)
 {
   struct so_list *new_solib, *start = NULL, *last = NULL;
-  const char *library_document;
+  char *library_document;
+  struct cleanup *old_chain;
   VEC(lm_info_p) *library_list;
   struct lm_info *info;
   int ix;
@@ -264,15 +259,22 @@ solib_target_current_sos (void)
   if (library_document == NULL)
     return NULL;
 
+  /* solib_target_parse_libraries may throw, so we use a cleanup.  */
+  old_chain = make_cleanup (xfree, library_document);
+
   /* Parse the list.  */
   library_list = solib_target_parse_libraries (library_document);
+
+  /* library_document string is not needed behind this point.  */
+  do_cleanups (old_chain);
+
   if (library_list == NULL)
     return NULL;
 
   /* Build a struct so_list for each entry on the list.  */
   for (ix = 0; VEC_iterate (lm_info_p, library_list, ix, info); ix++)
     {
-      new_solib = XZALLOC (struct so_list);
+      new_solib = XCNEW (struct so_list);
       strncpy (new_solib->so_name, info->name, SO_NAME_MAX_PATH_SIZE - 1);
       new_solib->so_name[SO_NAME_MAX_PATH_SIZE - 1] = '\0';
       strncpy (new_solib->so_original_name, info->name,
@@ -331,14 +333,13 @@ static void
 solib_target_relocate_section_addresses (struct so_list *so,
 					 struct target_section *sec)
 {
-  int flags = bfd_get_section_flags (sec->bfd, sec->the_bfd_section);
   CORE_ADDR offset;
 
   /* Build the offset table only once per object file.  We can not do
      it any earlier, since we need to open the file first.  */
   if (so->lm_info->offsets == NULL)
     {
-      int num_sections = bfd_count_sections (so->abfd);
+      int num_sections = gdb_bfd_count_sections (so->abfd);
 
       so->lm_info->offsets = xzalloc (SIZEOF_N_SECTION_OFFSETS (num_sections));
 
@@ -391,7 +392,8 @@ Could not relocate shared library \"%s\": wrong number of ALLOC sections"),
 		      gdb_assert (so->addr_low <= so->addr_high);
 		      found_range = 1;
 		    }
-		  so->lm_info->offsets->offsets[i] = section_bases[bases_index];
+		  so->lm_info->offsets->offsets[i]
+		    = section_bases[bases_index];
 		  bases_index++;
 		}
 	      if (!found_range)
@@ -454,7 +456,9 @@ Could not relocate shared library \"%s\": bad offsets"), so->so_name);
 	}
     }
 
-  offset = so->lm_info->offsets->offsets[sec->the_bfd_section->index];
+  offset = so->lm_info->offsets->offsets[gdb_bfd_section_index
+					 (sec->the_bfd_section->owner,
+					  sec->the_bfd_section)];
   sec->addr += offset;
   sec->endaddr += offset;
 }
@@ -473,12 +477,13 @@ solib_target_in_dynsym_resolve_code (CORE_ADDR pc)
   /* We don't have a range of addresses for the dynamic linker; there
      may not be one in the program's address space.  So only report
      PLT entries (which may be import stubs).  */
-  return in_plt_section (pc, NULL);
+  return in_plt_section (pc);
 }
 
 struct target_so_ops solib_target_so_ops;
 
-extern initialize_file_ftype _initialize_solib_target; /* -Wmissing-prototypes */
+/* -Wmissing-prototypes */
+extern initialize_file_ftype _initialize_solib_target;
 
 void
 _initialize_solib_target (void)

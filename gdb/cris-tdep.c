@@ -1,7 +1,6 @@
 /* Target dependent code for CRIS, for GDB, the GNU debugger.
 
-   Copyright (C) 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2001-2014 Free Software Foundation, Inc.
 
    Contributed by Axis Communications AB.
    Written by Hendrik Ruijter, Stefan Andersson, and Orjan Friberg.
@@ -35,6 +34,7 @@
 #include "target.h"
 #include "value.h"
 #include "opcode/cris.h"
+#include "osabi.h"
 #include "arch-utils.h"
 #include "regcache.h"
 #include "gdb_assert.h"
@@ -43,8 +43,10 @@
 
 #include "solib.h"              /* Support for shared libraries.  */
 #include "solib-svr4.h"
-#include "gdb_string.h"
+#include <string.h>
 #include "dis-asm.h"
+
+#include "cris-tdep.h"
 
 enum cris_num_regs
 {
@@ -70,7 +72,7 @@ enum cris_num_regs
    ARG1_REGNUM Contains the first parameter to a function.
    ARG2_REGNUM Contains the second parameter to a function.
    ARG3_REGNUM Contains the third parameter to a function.
-   ARG4_REGNUM Contains the fourth parameter to a function. Rest on stack.
+   ARG4_REGNUM Contains the fourth parameter to a function.  Rest on stack.
    gdbarch_sp_regnum Contains address of top of stack.
    gdbarch_pc_regnum Contains address of next instruction.
    SRP_REGNUM  Subroutine return pointer register.
@@ -94,7 +96,7 @@ enum cris_regnums
   MOF_REGNUM  = 23,
   SRP_REGNUM  = 27,
 
-  /* CRISv10 et. al. specific registers.  */
+  /* CRISv10 et al. specific registers.  */
   P0_REGNUM   = 16,
   P4_REGNUM   = 20,
   CCR_REGNUM  = 21,
@@ -145,14 +147,14 @@ extern const struct cris_spec_reg cris_spec_regs[];
 
 /* CRIS version, set via the user command 'set cris-version'.  Affects
    register names and sizes.  */
-static int usr_cmd_cris_version;
+static unsigned int usr_cmd_cris_version;
 
 /* Indicates whether to trust the above variable.  */
 static int usr_cmd_cris_version_valid = 0;
 
 static const char cris_mode_normal[] = "normal";
 static const char cris_mode_guru[] = "guru";
-static const char *cris_modes[] = {
+static const char *const cris_modes[] = {
   cris_mode_normal,
   cris_mode_guru,
   0
@@ -164,14 +166,6 @@ static const char *usr_cmd_cris_mode = cris_mode_normal;
 
 /* Whether to make use of Dwarf-2 CFI (default on).  */
 static int usr_cmd_cris_dwarf2_cfi = 1;
-
-/* CRIS architecture specific information.  */
-struct gdbarch_tdep
-{
-  int cris_version;
-  const char *cris_mode;
-  int cris_dwarf2_cfi;
-};
 
 /* Sigtramp identification code copied from i386-linux-tdep.c.  */
 
@@ -262,7 +256,7 @@ cris_sigcontext_addr (struct frame_info *this_frame)
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   CORE_ADDR pc;
   CORE_ADDR sp;
-  char buf[4];
+  gdb_byte buf[4];
 
   get_frame_register (this_frame, gdbarch_sp_regnum (gdbarch), buf);
   sp = extract_unsigned_integer (buf, 4, byte_order);
@@ -323,10 +317,8 @@ cris_sigtramp_frame_unwind_cache (struct frame_info *this_frame,
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   struct cris_unwind_cache *info;
-  CORE_ADDR pc;
-  CORE_ADDR sp;
   CORE_ADDR addr;
-  char buf[4];
+  gdb_byte buf[4];
   int i;
 
   if ((*this_cache))
@@ -397,7 +389,7 @@ cris_sigtramp_frame_unwind_cache (struct frame_info *this_frame,
       /* FIXME: If ERP is in a delay slot at this point then the PC will
 	 be wrong at this point.  This problem manifests itself in the
 	 sigaltstack.exp test case, which occasionally generates FAILs when
-	 the signal is received while in a delay slot.  
+	 the signal is received while in a delay slot.
 	 
 	 This could be solved by a couple of read_memory_unsigned_integer and a
 	 trad_frame_set_value.  */
@@ -448,6 +440,7 @@ cris_sigtramp_frame_sniffer (const struct frame_unwind *self,
 static const struct frame_unwind cris_sigtramp_frame_unwind =
 {
   SIGTRAMP_FRAME,
+  default_frame_unwind_stop_reason,
   cris_sigtramp_frame_this_id,
   cris_sigtramp_frame_prev_register,
   NULL,
@@ -475,48 +468,6 @@ crisv32_single_step_through_delay (struct gdbarch *gdbarch,
 	ret = 1;
     }
   return ret;
-}
-
-/* Hardware watchpoint support.  */
-
-/* We support 6 hardware data watchpoints, but cannot trigger on execute
-   (any combination of read/write is fine).  */
-
-int
-cris_can_use_hardware_watchpoint (int type, int count, int other)
-{
-  struct gdbarch_tdep *tdep = gdbarch_tdep (target_gdbarch);
-
-  /* No bookkeeping is done here; it is handled by the remote debug agent.  */
-
-  if (tdep->cris_version != 32)
-    return 0;
-  else
-    /* CRISv32: Six data watchpoints, one for instructions.  */
-    return (((type == bp_read_watchpoint || type == bp_access_watchpoint
-	     || type == bp_hardware_watchpoint) && count <= 6) 
-	    || (type == bp_hardware_breakpoint && count <= 1));
-}
-
-/* The CRISv32 hardware data watchpoints work by specifying ranges,
-   which have no alignment or length restrictions.  */
-
-int
-cris_region_ok_for_watchpoint (CORE_ADDR addr, int len)
-{
-  return 1;
-}
-
-/* If the inferior has some watchpoint that triggered, return the
-   address associated with that watchpoint.  Otherwise, return
-   zero.  */
-
-CORE_ADDR
-cris_stopped_data_address (void)
-{
-  CORE_ADDR eda;
-  eda = get_frame_register_unsigned (get_current_frame (), EDA_REGNUM);
-  return eda;
 }
 
 /* The instruction environment needed to find single-step breakpoints.  */
@@ -709,7 +660,7 @@ static CORE_ADDR cris_unwind_sp (struct gdbarch *gdbarch,
 				 struct frame_info *next_frame);
 
 /* When arguments must be pushed onto the stack, they go on in reverse
-   order.  The below implements a FILO (stack) to do this.  
+   order.  The below implements a FILO (stack) to do this.
    Copied from d10v-tdep.c.  */
 
 struct stack_item
@@ -720,7 +671,7 @@ struct stack_item
 };
 
 static struct stack_item *
-push_stack_item (struct stack_item *prev, void *contents, int len)
+push_stack_item (struct stack_item *prev, const gdb_byte *contents, int len)
 {
   struct stack_item *si;
   si = xmalloc (sizeof (struct stack_item));
@@ -753,9 +704,7 @@ cris_frame_unwind_cache (struct frame_info *this_frame,
 {
   struct gdbarch *gdbarch = get_frame_arch (this_frame);
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
-  CORE_ADDR pc;
   struct cris_unwind_cache *info;
-  int i;
 
   if ((*this_prologue_cache))
     return (*this_prologue_cache);
@@ -865,12 +814,9 @@ cris_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
 		      int struct_return, CORE_ADDR struct_addr)
 {
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
-  int stack_alloc;
   int stack_offset;
   int argreg;
   int argnum;
-
-  CORE_ADDR regval;
 
   /* The function's arguments and memory allocated by gdb for the arguments to
      point at reside in separate areas on the stack.
@@ -899,12 +845,12 @@ cris_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
   for (argnum = 0; argnum < nargs; argnum++)
     {
       int len;
-      char *val;
+      const gdb_byte *val;
       int reg_demand;
       int i;
       
       len = TYPE_LENGTH (value_type (args[argnum]));
-      val = (char *) value_contents (args[argnum]);
+      val = value_contents (args[argnum]);
       
       /* How may registers worth of storage do we need for this argument?  */
       reg_demand = (len / 4) + (len % 4 != 0 ? 1 : 0);
@@ -985,6 +931,7 @@ cris_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
 static const struct frame_unwind cris_frame_unwind = 
 {
   NORMAL_FRAME,
+  default_frame_unwind_stop_reason,
   cris_frame_this_id,
   cris_frame_prev_register,
   NULL,
@@ -1053,7 +1000,7 @@ static const struct frame_base cris_frame_base =
    the subq-instruction will be present with X as the number of bytes
    needed for storage.  The reshuffle with respect to r8 may be performed
    with any size S (b, w, d) and any of the general registers Z={0..13}. 
-   The offset U should be representable by a signed 8-bit value in all cases. 
+   The offset U should be representable by a signed 8-bit value in all cases.
    Thus, the prefix word is assumed to be immediate byte offset mode followed
    by another word containing the instruction.
 
@@ -1073,7 +1020,7 @@ static const struct frame_base cris_frame_base =
    move.d r13,rV    ; P3
    move.S [r8+U],rZ ; P4
 
-   if any of the call parameters are stored. The host expects these 
+   if any of the call parameters are stored.  The host expects these 
    instructions to be executed in order to get the call parameters right.  */
 
 /* Examine the prologue of a function.  The variable ip is the address of 
@@ -1135,7 +1082,7 @@ cris_scan_prologue (CORE_ADDR pc, struct frame_info *this_frame,
       pc += 2;
       if (insn == 0xE1FC)
         {
-          /* push <reg> 32 bit instruction */
+          /* push <reg> 32 bit instruction.  */
           insn_next = read_memory_unsigned_integer (pc, 2, byte_order);
           pc += 2;
           regno = cris_get_operand2 (insn_next);
@@ -1465,7 +1412,8 @@ cris_unwind_sp (struct gdbarch *gdbarch, struct frame_info *next_frame)
    the breakpoint should be inserted.  */
 
 static const unsigned char *
-cris_breakpoint_from_pc (struct gdbarch *gdbarch, CORE_ADDR *pcptr, int *lenptr)
+cris_breakpoint_from_pc (struct gdbarch *gdbarch,
+			 CORE_ADDR *pcptr, int *lenptr)
 {
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
   static unsigned char break8_insn[] = {0x38, 0xe9};
@@ -1486,7 +1434,7 @@ cris_spec_reg_applicable (struct gdbarch *gdbarch,
 			  struct cris_spec_reg spec_reg)
 {
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
-  int version = tdep->cris_version;
+  unsigned int version = tdep->cris_version;
   
   switch (spec_reg.applicable_version)
     {
@@ -1583,8 +1531,7 @@ cris_cannot_store_register (struct gdbarch *gdbarch, int regno)
   /* There are three kinds of registers we refuse to write to.
      1. Those that not implemented.
      2. Those that are read-only (depends on the processor mode).
-     3. Those registers to which a write has no effect.
-  */
+     3. Those registers to which a write has no effect.  */
 
   if (regno < 0
       || regno >= gdbarch_num_regs (gdbarch)
@@ -1625,8 +1572,7 @@ crisv32_cannot_store_register (struct gdbarch *gdbarch, int regno)
   /* There are three kinds of registers we refuse to write to.
      1. Those that not implemented.
      2. Those that are read-only (depends on the processor mode).
-     3. Those registers to which a write has no effect.
-  */
+     3. Those registers to which a write has no effect.  */
 
   if (regno < 0
       || regno >= gdbarch_num_regs (gdbarch)
@@ -1706,7 +1652,7 @@ crisv32_register_type (struct gdbarch *gdbarch, int regno)
 
 static void
 cris_store_return_value (struct type *type, struct regcache *regcache,
-			 const void *valbuf)
+			 const gdb_byte *valbuf)
 {
   struct gdbarch *gdbarch = get_regcache_arch (regcache);
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
@@ -1724,15 +1670,15 @@ cris_store_return_value (struct type *type, struct regcache *regcache,
       /* Put the return value in R10 and R11.  */
       val = extract_unsigned_integer (valbuf, 4, byte_order);
       regcache_cooked_write_unsigned (regcache, ARG1_REGNUM, val);
-      val = extract_unsigned_integer ((char *)valbuf + 4, len - 4, byte_order);
+      val = extract_unsigned_integer (valbuf + 4, len - 4, byte_order);
       regcache_cooked_write_unsigned (regcache, ARG2_REGNUM, val);
     }
   else
     error (_("cris_store_return_value: type length too large."));
 }
 
-/* Return the name of register regno as a string. Return NULL for an invalid or
-   unimplemented register.  */
+/* Return the name of register regno as a string.  Return NULL for an
+   invalid or unimplemented register.  */
 
 static const char *
 cris_special_register_name (struct gdbarch *gdbarch, int regno)
@@ -1877,7 +1823,7 @@ cris_dwarf2_frame_init_reg (struct gdbarch *gdbarch, int regnum,
 
 static void
 cris_extract_return_value (struct type *type, struct regcache *regcache,
-			   void *valbuf)
+			   gdb_byte *valbuf)
 {
   struct gdbarch *gdbarch = get_regcache_arch (regcache);
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
@@ -1896,7 +1842,7 @@ cris_extract_return_value (struct type *type, struct regcache *regcache,
       regcache_cooked_read_unsigned (regcache, ARG1_REGNUM, &val);
       store_unsigned_integer (valbuf, 4, byte_order, val);
       regcache_cooked_read_unsigned (regcache, ARG2_REGNUM, &val);
-      store_unsigned_integer ((char *)valbuf + 4, len - 4, byte_order, val);
+      store_unsigned_integer (valbuf + 4, len - 4, byte_order, val);
     }
   else
     error (_("cris_extract_return_value: type length too large"));
@@ -1905,7 +1851,7 @@ cris_extract_return_value (struct type *type, struct regcache *regcache,
 /* Handle the CRIS return value convention.  */
 
 static enum return_value_convention
-cris_return_value (struct gdbarch *gdbarch, struct type *func_type,
+cris_return_value (struct gdbarch *gdbarch, struct value *function,
 		   struct type *type, struct regcache *regcache,
 		   gdb_byte *readbuf, const gdb_byte *writebuf)
 {
@@ -1928,13 +1874,13 @@ cris_return_value (struct gdbarch *gdbarch, struct type *func_type,
    instruction.  It stems from cris_constraint, found in cris-dis.c.  */
 
 static int
-constraint (unsigned int insn, const signed char *inst_args, 
+constraint (unsigned int insn, const char *inst_args,
             inst_env_type *inst_env)
 {
   int retval = 0;
   int tmp, i;
 
-  const char *s = inst_args;
+  const gdb_byte *s = (const gdb_byte *) inst_args;
 
   for (; *s; s++)
     switch (*s) 
@@ -2125,7 +2071,7 @@ find_step_target (struct frame_info *frame, inst_env_type *inst_env)
 }
 
 /* There is no hardware single-step support.  The function find_step_target
-   digs through the opcodes in order to find all possible targets. 
+   digs through the opcodes in order to find all possible targets.
    Either one ordinary target or two targets for branches may be found.  */
 
 static int
@@ -2231,9 +2177,6 @@ static unsigned long get_data_from_address (unsigned short *inst,
 static void
 bdap_prefix (unsigned short inst, inst_env_type *inst_env)
 {
-
-  long offset;
-
   /* It's invalid to be in a delay slot.  */
   if (inst_env->slot_needed || inst_env->prefix_found)
     {
@@ -2384,7 +2327,8 @@ sixteen_bit_offset_branch_op (unsigned short inst, inst_env_type *inst_env)
     }
 
   /* We have a branch, find out the offset for the branch.  */
-  offset = read_memory_integer (inst_env->reg[REG_PC], 2, inst_env->byte_order);
+  offset = read_memory_integer (inst_env->reg[REG_PC], 2,
+				inst_env->byte_order);
 
   /* The instruction is one word longer than normal, so add one word
      to the PC.  */
@@ -2487,7 +2431,8 @@ asr_op (unsigned short inst, inst_env_type *inst_env)
           return;
         }
       /* Get the number of bits to shift.  */
-      shift_steps = cris_get_asr_shift_steps (inst_env->reg[cris_get_operand1 (inst)]);
+      shift_steps
+	= cris_get_asr_shift_steps (inst_env->reg[cris_get_operand1 (inst)]);
       value = inst_env->reg[REG_PC];
 
       /* Find out how many bits the operation should apply to.  */
@@ -2566,7 +2511,7 @@ asrq_op (unsigned short inst, inst_env_type *inst_env)
           return;
         }
       /* The shift size is given as a 5 bit quick value, i.e. we don't
-         want the the sign bit of the quick value.  */
+         want the sign bit of the quick value.  */
       shift_steps = cris_get_asr_shift_steps (inst);
       value = inst_env->reg[REG_PC];
       if (value & SIGNED_DWORD_MASK)
@@ -2890,7 +2835,7 @@ none_reg_mode_jump_op (unsigned short inst, inst_env_type *inst_env)
         {
           check_assign (inst, inst_env);
 
-          /* Get the new value for the the PC.  */
+          /* Get the new value for the PC.  */
           newpc = 
             read_memory_unsigned_integer ((CORE_ADDR) inst_env->prefix_value,
                                           4, inst_env->byte_order);
@@ -3104,7 +3049,8 @@ move_mem_to_reg_movem_op (unsigned short inst, inst_env_type *inst_env)
         }
       /* The increment is not depending on the size, instead it's depending
          on the number of registers loaded from memory.  */
-      if ((cris_get_operand1 (inst) == REG_PC) && (cris_get_mode (inst) == AUTOINC_MODE))
+      if ((cris_get_operand1 (inst) == REG_PC)
+	  && (cris_get_mode (inst) == AUTOINC_MODE))
         {
           /* It's invalid to change the PC in a delay slot.  */
           if (inst_env->slot_needed)
@@ -3142,7 +3088,8 @@ move_reg_to_mem_movem_op (unsigned short inst, inst_env_type *inst_env)
     {
       /* The increment is not depending on the size, instead it's depending
          on the number of registers loaded to memory.  */
-      if ((cris_get_operand1 (inst) == REG_PC) && (cris_get_mode (inst) == AUTOINC_MODE))
+      if ((cris_get_operand1 (inst) == REG_PC)
+	  && (cris_get_mode (inst) == AUTOINC_MODE))
         {
           /* It's invalid to change the PC in a delay slot.  */
           if (inst_env->slot_needed)
@@ -3245,7 +3192,7 @@ mulu_op (unsigned short inst, inst_env_type *inst_env)
   inst_env->disable_interrupt = 0;
 }
 
-/* Calculate the result of the instruction for ADD, SUB, CMP AND, OR and MOVE. 
+/* Calculate the result of the instruction for ADD, SUB, CMP AND, OR and MOVE.
    The MOVE instruction is the move from source to register.  */
 
 static void 
@@ -3414,7 +3361,8 @@ reg_mode_add_sub_cmp_and_or_move_op (unsigned short inst,
    extend instruction, the size field is changed in instruction.  */
 
 static unsigned long 
-get_data_from_address (unsigned short *inst, CORE_ADDR address, enum bfd_endian byte_order)
+get_data_from_address (unsigned short *inst, CORE_ADDR address,
+		       enum bfd_endian byte_order)
 {
   int size = cris_get_size (*inst);
   unsigned long value;
@@ -3537,7 +3485,7 @@ handle_inc_and_index_mode_for_aritm_op (unsigned short inst,
   unsigned long operand3;
   int size;
 
-  /* The instruction is either an indirect or autoincrement addressing mode. 
+  /* The instruction is either an indirect or autoincrement addressing mode.
      Check if the destination register is the PC.  */
   if (cris_get_operand2 (inst) == REG_PC)
     {
@@ -3556,7 +3504,8 @@ handle_inc_and_index_mode_for_aritm_op (unsigned short inst,
     }
   /* If this is an autoincrement addressing mode, check if the increment
      changes the PC.  */
-  if ((cris_get_operand1 (inst) == REG_PC) && (cris_get_mode (inst) == AUTOINC_MODE))
+  if ((cris_get_operand1 (inst) == REG_PC)
+      && (cris_get_mode (inst) == AUTOINC_MODE))
     {
       /* Get the size field.  */
       size = cris_get_size (inst);
@@ -3865,26 +3814,25 @@ cris_delayed_get_disassembler (bfd_vma addr, struct disassemble_info *info)
   return print_insn (addr, info);
 }
 
-/* Copied from <asm/elf.h>.  */
-typedef unsigned long elf_greg_t;
+/* Originally from <asm/elf.h>.  */
+typedef unsigned char cris_elf_greg_t[4];
 
 /* Same as user_regs_struct struct in <asm/user.h>.  */
 #define CRISV10_ELF_NGREG 35
-typedef elf_greg_t elf_gregset_t[CRISV10_ELF_NGREG];
+typedef cris_elf_greg_t cris_elf_gregset_t[CRISV10_ELF_NGREG];
 
 #define CRISV32_ELF_NGREG 32
-typedef elf_greg_t crisv32_elf_gregset_t[CRISV32_ELF_NGREG];
+typedef cris_elf_greg_t crisv32_elf_gregset_t[CRISV32_ELF_NGREG];
 
-/* Unpack an elf_gregset_t into GDB's register cache.  */
+/* Unpack a cris_elf_gregset_t into GDB's register cache.  */
 
 static void 
-cris_supply_gregset (struct regcache *regcache, elf_gregset_t *gregsetp)
+cris_supply_gregset (struct regcache *regcache, cris_elf_gregset_t *gregsetp)
 {
   struct gdbarch *gdbarch = get_regcache_arch (regcache);
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
   int i;
-  elf_greg_t *regp = *gregsetp;
-  static char zerobuf[4] = {0};
+  cris_elf_greg_t *regp = *gregsetp;
 
   /* The kernel dumps all 32 registers as unsigned longs, but supply_register
      knows about the actual size of each register so that's no problem.  */
@@ -3914,12 +3862,12 @@ fetch_core_registers (struct regcache *regcache,
 		      char *core_reg_sect, unsigned core_reg_size,
                       int which, CORE_ADDR reg_addr)
 {
-  elf_gregset_t gregset;
+  cris_elf_gregset_t gregset;
 
   switch (which)
     {
     case 0:
-      if (core_reg_size != sizeof (elf_gregset_t) 
+      if (core_reg_size != sizeof (cris_elf_gregset_t)
 	  && core_reg_size != sizeof (crisv32_elf_gregset_t))
         {
           warning (_("wrong size gregset struct in core file"));
@@ -3952,24 +3900,22 @@ extern initialize_file_ftype _initialize_cris_tdep; /* -Wmissing-prototypes */
 void
 _initialize_cris_tdep (void)
 {
-  static struct cmd_list_element *cris_set_cmdlist;
-  static struct cmd_list_element *cris_show_cmdlist;
-
   struct cmd_list_element *c;
 
   gdbarch_register (bfd_arch_cris, cris_gdbarch_init, cris_dump_tdep);
   
   /* CRIS-specific user-commands.  */
-  add_setshow_uinteger_cmd ("cris-version", class_support, 
-			    &usr_cmd_cris_version, 
-			    _("Set the current CRIS version."),
-			    _("Show the current CRIS version."),
-			    _("\
+  add_setshow_zuinteger_cmd ("cris-version", class_support,
+			     &usr_cmd_cris_version,
+			     _("Set the current CRIS version."),
+			     _("Show the current CRIS version."),
+			     _("\
 Set to 10 for CRISv10 or 32 for CRISv32 if autodetection fails.\n\
 Defaults to 10. "),
-			    set_cris_version,
-			    NULL, /* FIXME: i18n: Current CRIS version is %s.  */
-			    &setlist, &showlist);
+			     set_cris_version,
+			     NULL, /* FIXME: i18n: Current CRIS version
+				      is %s.  */
+			     &setlist, &showlist);
 
   add_setshow_enum_cmd ("cris-mode", class_support, 
 			cris_modes, &usr_cmd_cris_mode, 
@@ -3988,7 +3934,8 @@ Makes GDB use the NRP register instead of the ERP register in certain cases."),
 			   _("Show the usage of Dwarf-2 CFI for CRIS."),
 			   _("Set this to \"off\" if using gcc-cris < R59."),
 			   set_cris_dwarf2_cfi,
-			   NULL, /* FIXME: i18n: Usage of Dwarf-2 CFI for CRIS is %d.  */
+			   NULL, /* FIXME: i18n: Usage of Dwarf-2 CFI
+				    for CRIS is %d.  */
 			   &setlist, &showlist);
 
   deprecated_add_core_fns (&cris_elf_core_fns);
@@ -4057,7 +4004,7 @@ cris_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
 {
   struct gdbarch *gdbarch;
   struct gdbarch_tdep *tdep;
-  int cris_version;
+  unsigned int cris_version;
 
   if (usr_cmd_cris_version_valid)
     {
@@ -4107,11 +4054,13 @@ cris_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
       break;
 
     case BFD_ENDIAN_BIG:
-      internal_error (__FILE__, __LINE__, _("cris_gdbarch_init: big endian byte order in info"));
+      internal_error (__FILE__, __LINE__,
+		      _("cris_gdbarch_init: big endian byte order in info"));
       break;
     
     default:
-      internal_error (__FILE__, __LINE__, _("cris_gdbarch_init: unknown byte order in info"));
+      internal_error (__FILE__, __LINE__,
+		      _("cris_gdbarch_init: unknown byte order in info"));
     }
 
   set_gdbarch_return_value (gdbarch, cris_return_value);
@@ -4218,9 +4167,9 @@ cris_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   frame_unwind_append_unwinder (gdbarch, &cris_frame_unwind);
   frame_base_set_default (gdbarch, &cris_frame_base);
 
-  set_solib_svr4_fetch_link_map_offsets
-    (gdbarch, svr4_ilp32_fetch_link_map_offsets);
-  
+  /* Hook in ABI-specific overrides, if they have been registered.  */
+  gdbarch_init_osabi (info, gdbarch);
+
   /* FIXME: cagney/2003-08-27: It should be possible to select a CRIS
      disassembler, even when there is no BFD.  Does something like
      "gdb; target remote; disassmeble *0x123" work?  */

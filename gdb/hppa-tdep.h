@@ -1,7 +1,6 @@
 /* Target-dependent code for the HP PA-RISC architecture.
 
-   Copyright (C) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2003-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -51,6 +50,13 @@ enum hppa_regnum
   HPPA_ISR_REGNUM = 39,		/* Interrupt Space Register */
   HPPA_IOR_REGNUM = 40,		/* Interrupt Offset Register */
   HPPA_SR4_REGNUM = 43,		/* space register 4 */
+  HPPA_SR0_REGNUM = 44,		/* space register 0 */
+  HPPA_SR1_REGNUM = 45,		/* space register 1 */
+  HPPA_SR2_REGNUM = 46,		/* space register 2 */
+  HPPA_SR3_REGNUM = 47,		/* space register 3 */
+  HPPA_SR5_REGNUM = 48,		/* space register 5 */
+  HPPA_SR6_REGNUM = 49,		/* space register 6 */
+  HPPA_SR7_REGNUM = 50,		/* space register 7 */
   HPPA_RCR_REGNUM = 51,		/* Recover Counter (also known as cr0) */
   HPPA_PID0_REGNUM = 52,	/* Protection ID */
   HPPA_PID1_REGNUM = 53,	/* Protection ID */
@@ -59,16 +65,17 @@ enum hppa_regnum
   HPPA_CCR_REGNUM = 54,		/* Coprocessor Configuration Register */
   HPPA_TR0_REGNUM = 57,		/* Temporary Registers (cr24 -> cr31) */
   HPPA_CR26_REGNUM = 59,
-  HPPA_CR27_REGNUM = 60,	/* Base register for thread-local storage, cr27 */
+  HPPA_CR27_REGNUM = 60,	/* Base register for thread-local
+				   storage, cr27 */
   HPPA_FP0_REGNUM = 64,		/* First floating-point.  */
   HPPA_FP4_REGNUM = 72,
   HPPA64_FP4_REGNUM = 68,
   HPPA_FP31R_REGNUM = 127,	/* Last floating-point.  */
 
-  HPPA_ARG0_REGNUM = 26,	/* The first argument of a callee. */
-  HPPA_ARG1_REGNUM = 25,	/* The second argument of a callee. */
-  HPPA_ARG2_REGNUM = 24,	/* The third argument of a callee. */
-  HPPA_ARG3_REGNUM = 23		/* The fourth argument of a callee. */
+  HPPA_ARG0_REGNUM = 26,	/* The first argument of a callee.  */
+  HPPA_ARG1_REGNUM = 25,	/* The second argument of a callee.  */
+  HPPA_ARG2_REGNUM = 24,	/* The third argument of a callee.  */
+  HPPA_ARG3_REGNUM = 23		/* The fourth argument of a callee.  */
 };
 
 /* Instruction size.  */
@@ -90,11 +97,9 @@ struct gdbarch_tdep
   CORE_ADDR (*find_global_pointer) (struct gdbarch *, struct value *);
 
   /* For shared libraries, each call goes through a small piece of
-     trampoline code in the ".plt", or equivalent, section.
-     IN_SOLIB_CALL_TRAMPOLINE evaluates to nonzero if we are currently
-     stopped in one of these.  */
-  int (*in_solib_call_trampoline) (struct gdbarch *gdbarch,
-				   CORE_ADDR pc, char *name);
+     trampoline code in the ".plt" section.  IN_SOLIB_CALL_TRAMPOLINE
+     evaluates to nonzero if we are currently stopped in one of these.  */
+  int (*in_solib_call_trampoline) (struct gdbarch *gdbarch, CORE_ADDR pc);
 
   /* For targets that support multiple spaces, we may have additional stubs
      in the return path.  These stubs are internal to the ABI, and users are
@@ -155,8 +160,8 @@ struct unwind_table_entry
 
     /* This is *NOT* part of an actual unwind_descriptor in an object
        file.  It is *ONLY* part of the "internalized" descriptors that
-       we create from those in a file.
-     */
+       we create from those in a file.  */
+
     struct
       {
 	unsigned int stub_type:4;	/* 0..3 */
@@ -201,13 +206,13 @@ struct hppa_unwind_info
   {
     struct unwind_table_entry *table;	/* Pointer to unwind info */
     struct unwind_table_entry *cache;	/* Pointer to last entry we found */
-    int last;			/* Index of last entry */
+    int last;				/* Index of last entry */
   };
 
 struct hppa_objfile_private
   {
     struct hppa_unwind_info *unwind_info;	/* a pointer */
-    struct so_list *so_info;	/* a pointer  */
+    struct so_list *so_info;			/* a pointer  */
     CORE_ADDR dp;
 
     int dummy_call_sequence_reg;
@@ -235,15 +240,14 @@ extern void hppa_write_pc (struct regcache *regcache, CORE_ADDR pc);
 extern CORE_ADDR hppa_unwind_pc (struct gdbarch *gdbarch,
 				 struct frame_info *next_frame);
 
-extern struct minimal_symbol *
+extern struct bound_minimal_symbol
   hppa_lookup_stub_minimal_symbol (const char *name,
                                    enum unwind_stub_types stub_type);
 
-extern struct hppa_objfile_private *
-hppa_init_objfile_priv_data (struct objfile *objfile);
+extern struct hppa_objfile_private *hppa_init_objfile_priv_data (struct objfile *objfile);
 
 extern int hppa_in_solib_call_trampoline (struct gdbarch *gdbarch,
-					  CORE_ADDR pc, char *name);
+					  CORE_ADDR pc);
 extern CORE_ADDR hppa_skip_trampoline_code (struct frame_info *, CORE_ADDR pc);
 
 #endif  /* hppa-tdep.h */

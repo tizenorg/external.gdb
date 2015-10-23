@@ -1,7 +1,6 @@
 /* Target-dependent code for NetBSD/mips.
 
-   Copyright (C) 2002, 2003, 2004, 2006, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
 
    Contributed by Wasabi Systems, Inc.
 
@@ -29,7 +28,7 @@
 #include "osabi.h"
 
 #include "gdb_assert.h"
-#include "gdb_string.h"
+#include <string.h>
 
 #include "nbsd-tdep.h"
 #include "mipsnbsd-tdep.h"
@@ -104,13 +103,13 @@ mipsnbsd_supply_gregset (const struct regset *regset,
 
 /* NetBSD/mips register sets.  */
 
-static struct regset mipsnbsd_gregset =
+static const struct regset mipsnbsd_gregset =
 {
   NULL,
   mipsnbsd_supply_gregset
 };
 
-static struct regset mipsnbsd_fpregset =
+static const struct regset mipsnbsd_fpregset =
 {
   NULL,
   mipsnbsd_supply_fpregset
@@ -173,7 +172,8 @@ mipsnbsd_fill_reg (const struct regcache *regcache, char *regs, int regno)
 }
 
 void
-mipsnbsd_supply_fpreg (struct regcache *regcache, const char *fpregs, int regno)
+mipsnbsd_supply_fpreg (struct regcache *regcache,
+		       const char *fpregs, int regno)
 {
   struct gdbarch *gdbarch = get_regcache_arch (regcache);
   int i;
@@ -211,6 +211,8 @@ mipsnbsd_fill_fpreg (const struct regcache *regcache, char *fpregs, int regno)
 			      * mips_isa_regsize (gdbarch)));
 }
 
+#if 0
+
 /* Under NetBSD/mips, signal handler invocations can be identified by the
    designated code sequence that is used to return from a signal handler.
    In particular, the return address of a signal handler points to the
@@ -244,6 +246,8 @@ static const unsigned char sigtramp_retcode_mipseb[RETCODE_SIZE] =
   0x00, 0x00, 0x00, 0x0c,	/* syscall */
 };
 
+#endif
+
 /* Figure out where the longjmp will land.  We expect that we have
    just entered longjmp and haven't yet setup the stack frame, so the
    args are still in the argument regs.  MIPS_A0_REGNUM points at the
@@ -262,7 +266,7 @@ mipsnbsd_get_longjmp_target (struct frame_info *frame, CORE_ADDR *pc)
   struct gdbarch *gdbarch = get_frame_arch (frame);
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   CORE_ADDR jb_addr;
-  char *buf;
+  gdb_byte *buf;
 
   buf = alloca (NBSD_MIPS_JB_ELEMENT_SIZE (gdbarch));
 

@@ -1,7 +1,6 @@
 /* Target-dependent code for NetBSD/i386.
 
-   Copyright (C) 1988, 1989, 1991, 1992, 1994, 1996, 2000, 2001, 2002, 2003,
-   2004, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 1988-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -30,7 +29,7 @@
 #include "tramp-frame.h"
 
 #include "gdb_assert.h"
-#include "gdb_string.h"
+#include <string.h>
 
 #include "i386-tdep.h"
 #include "i387-tdep.h"
@@ -246,7 +245,7 @@ i386nbsd_sigtramp_cache_init (const struct tramp_frame *self,
       reg_offset = i386nbsd_sc_reg_offset;
       num_regs = ARRAY_SIZE (i386nbsd_sc_reg_offset);
 
-      /* Read in the sigcontext address */
+      /* Read in the sigcontext address.  */
       base = read_memory_unsigned_integer (sp + 8, 4, byte_order);
     }
   else
@@ -254,7 +253,7 @@ i386nbsd_sigtramp_cache_init (const struct tramp_frame *self,
       reg_offset = i386nbsd_mc_reg_offset;
       num_regs = ARRAY_SIZE (i386nbsd_mc_reg_offset);
 
-      /* Read in the ucontext address */
+      /* Read in the ucontext address.  */
       base = read_memory_unsigned_integer (sp + 8, 4, byte_order);
       /* offsetof(ucontext_t, uc_mcontext) == 36 */
       base += 36;
@@ -285,7 +284,7 @@ i386nbsd_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
   /* NetBSD uses -freg-struct-return by default.  */
   tdep->struct_return = reg_struct_return;
 
-  /* NetBSD uses tramp_frame sniffers for signal trampolines. */
+  /* NetBSD uses tramp_frame sniffers for signal trampolines.  */
   tdep->sigcontext_addr= 0;
   tdep->sigtramp_start = 0;
   tdep->sigtramp_end = 0;

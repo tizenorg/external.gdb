@@ -1,6 +1,6 @@
 /* Target-dependent code for OpenBSD/mips64.
 
-   Copyright (C) 2004, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2004-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -18,6 +18,7 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 #include "defs.h"
+#include "gdbtypes.h"
 #include "osabi.h"
 #include "regcache.h"
 #include "regset.h"
@@ -25,10 +26,15 @@
 #include "tramp-frame.h"
 
 #include "gdb_assert.h"
-#include "gdb_string.h"
+#include <string.h>
 
+#include "obsd-tdep.h"
 #include "mips-tdep.h"
 #include "solib-svr4.h"
+
+/* The MIPS64 Floating-Point Quad-Precision format is similar to
+   big-endian IA-64 Quad-Precision format.  */
+#define floatformats_mips64_quad floatformats_ia64_quad
 
 #define MIPS64OBSD_NUM_REGS 73
 
@@ -55,7 +61,7 @@ mips64obsd_supply_gregset (const struct regset *regset,
 
 /* OpenBSD/mips64 register set.  */
 
-static struct regset mips64obsd_gregset =
+static const struct regset mips64obsd_gregset =
 {
   NULL,
   mips64obsd_supply_gregset
@@ -146,6 +152,11 @@ mips64obsd_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
     (gdbarch, mips64obsd_regset_from_core_section);
 
   tramp_frame_prepend_unwinder (gdbarch, &mips64obsd_sigframe);
+
+  set_gdbarch_long_double_bit (gdbarch, 128);
+  set_gdbarch_long_double_format (gdbarch, floatformats_mips64_quad);
+
+  obsd_init_abi(info, gdbarch);
 
   /* OpenBSD/mips64 has SVR4-style shared libraries.  */
   set_solib_svr4_fetch_link_map_offsets

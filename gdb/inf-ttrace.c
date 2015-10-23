@@ -1,7 +1,6 @@
 /* Low-level child interface to ttrace.
 
-   Copyright (C) 2004, 2005, 2006, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2004-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -32,13 +31,14 @@
 #include "target.h"
 
 #include "gdb_assert.h"
-#include "gdb_string.h"
+#include <string.h>
 #include <sys/mman.h>
 #include <sys/ttrace.h>
 #include <signal.h>
 
 #include "inf-child.h"
 #include "inf-ttrace.h"
+#include "common/filestuff.h"
 
 
 
@@ -195,7 +195,7 @@ inf_ttrace_add_page (pid_t pid, CORE_ADDR addr)
 		  addr, 0, (uintptr_t)&prot) == -1)
 	perror_with_name (("ttrace"));
       
-      page = XMALLOC (struct inf_ttrace_page);
+      page = XNEW (struct inf_ttrace_page);
       page->addr = addr;
       page->prot = prot;
       page->refcount = 0;
@@ -314,7 +314,8 @@ inf_ttrace_disable_page_protections (pid_t pid)
    type TYPE.  */
 
 static int
-inf_ttrace_insert_watchpoint (CORE_ADDR addr, int len, int type,
+inf_ttrace_insert_watchpoint (struct target_ops *self,
+			      CORE_ADDR addr, int len, int type,
 			      struct expression *cond)
 {
   const int pagesize = inf_ttrace_page_dict.pagesize;
@@ -338,7 +339,8 @@ inf_ttrace_insert_watchpoint (CORE_ADDR addr, int len, int type,
    type TYPE.  */
 
 static int
-inf_ttrace_remove_watchpoint (CORE_ADDR addr, int len, int type,
+inf_ttrace_remove_watchpoint (struct target_ops *self,
+			      CORE_ADDR addr, int len, int type,
 			      struct expression *cond)
 {
   const int pagesize = inf_ttrace_page_dict.pagesize;
@@ -359,13 +361,15 @@ inf_ttrace_remove_watchpoint (CORE_ADDR addr, int len, int type,
 }
 
 static int
-inf_ttrace_can_use_hw_breakpoint (int type, int len, int ot)
+inf_ttrace_can_use_hw_breakpoint (struct target_ops *self,
+				  int type, int len, int ot)
 {
   return (type == bp_hardware_watchpoint);
 }
 
 static int
-inf_ttrace_region_ok_for_hw_watchpoint (CORE_ADDR addr, int len)
+inf_ttrace_region_ok_for_hw_watchpoint (struct target_ops *self,
+					CORE_ADDR addr, int len)
 {
   return 1;
 }
@@ -374,7 +378,7 @@ inf_ttrace_region_ok_for_hw_watchpoint (CORE_ADDR addr, int len)
    by hitting a "hardware" watchpoint.  */
 
 static int
-inf_ttrace_stopped_by_watchpoint (void)
+inf_ttrace_stopped_by_watchpoint (struct target_ops *ops)
 {
   pid_t pid = ptid_get_pid (inferior_ptid);
   lwpid_t lwpid = ptid_get_lwp (inferior_ptid);
@@ -409,7 +413,8 @@ inf_ttrace_stopped_by_watchpoint (void)
 static pid_t inf_ttrace_vfork_ppid = -1;
 
 static int
-inf_ttrace_follow_fork (struct target_ops *ops, int follow_child)
+inf_ttrace_follow_fork (struct target_ops *ops, int follow_child,
+			int detach_fork)
 {
   pid_t pid, fpid;
   lwpid_t lwpid, flwpid;
@@ -458,20 +463,26 @@ inf_ttrace_follow_fork (struct target_ops *ops, int follow_child)
       inf->pspace = parent_inf->pspace;
       inf->aspace = parent_inf->aspace;
       copy_terminal_info (inf, parent_inf);
-      detach_breakpoints (pid);
+      detach_breakpoints (ptid_build (pid, lwpid, 0));
 
       target_terminal_ours ();
-      fprintf_unfiltered (gdb_stdlog, _("\
-Attaching after fork to child process %ld.\n"), (long)fpid);
+      fprintf_unfiltered (gdb_stdlog,
+			  _("Attaching after fork to child process %ld.\n"),
+			  (long)fpid);
     }
   else
     {
       inferior_ptid = ptid_build (pid, lwpid, 0);
-      detach_breakpoints (fpid);
+      /* Detach any remaining breakpoints in the child.  In the case
+	 of fork events, we do not need to do this, because breakpoints
+	 should have already been removed earlier.  */
+      if (tts.tts_event == TTEVT_VFORK)
+	detach_breakpoints (ptid_build (fpid, flwpid, 0));
 
       target_terminal_ours ();
-      fprintf_unfiltered (gdb_stdlog, _("\
-Detaching after fork from child process %ld.\n"), (long)fpid);
+      fprintf_unfiltered (gdb_stdlog,
+			  _("Detaching after fork from child process %ld.\n"),
+			  (long)fpid);
     }
 
   if (tts.tts_event == TTEVT_VFORK)
@@ -553,6 +564,11 @@ do_cleanup_pfds (void *dummy)
   close (inf_ttrace_pfd1[1]);
   close (inf_ttrace_pfd2[0]);
   close (inf_ttrace_pfd2[1]);
+
+  unmark_fd_no_cloexec (inf_ttrace_pfd1[0]);
+  unmark_fd_no_cloexec (inf_ttrace_pfd1[1]);
+  unmark_fd_no_cloexec (inf_ttrace_pfd2[0]);
+  unmark_fd_no_cloexec (inf_ttrace_pfd2[1]);
 }
 
 static void
@@ -567,6 +583,11 @@ inf_ttrace_prepare (void)
       close (inf_ttrace_pfd2[0]);
       perror_with_name (("pipe"));
     }
+
+  mark_fd_no_cloexec (inf_ttrace_pfd1[0]);
+  mark_fd_no_cloexec (inf_ttrace_pfd1[1]);
+  mark_fd_no_cloexec (inf_ttrace_pfd2[0]);
+  mark_fd_no_cloexec (inf_ttrace_pfd2[1]);
 }
 
 /* Prepare to be traced.  */
@@ -623,18 +644,9 @@ inf_ttrace_him (struct target_ops *ops, int pid)
 
   do_cleanups (old_chain);
 
-  push_target (ops);
+  if (!target_is_pushed (ops))
+    push_target (ops);
 
-  /* On some targets, there must be some explicit synchronization
-     between the parent and child processes after the debugger forks,
-     and before the child execs the debuggee program.  This call
-     basically gives permission for the child to exec.  */
-
-  target_acknowledge_created_inferior (pid);
-
-  /* START_INFERIOR_TRAPS_EXPECTED is defined in inferior.h, and will
-     be 1 or 2 depending on whether we're starting without or with a
-     shell.  */
   startup_inferior (START_INFERIOR_TRAPS_EXPECTED);
 
   /* On some targets, there must be some explicit actions taken after
@@ -655,7 +667,7 @@ inf_ttrace_create_inferior (struct target_ops *ops, char *exec_file,
   gdb_assert (inf_ttrace_vfork_ppid == -1);
 
   pid = fork_inferior (exec_file, allargs, env, inf_ttrace_me, NULL,
-		       inf_ttrace_prepare, NULL);
+		       inf_ttrace_prepare, NULL, NULL);
 
   inf_ttrace_him (ops, pid);
 }
@@ -684,12 +696,58 @@ inf_ttrace_mourn_inferior (struct target_ops *ops)
     }
   inf_ttrace_page_dict.count = 0;
 
-  unpush_target (ops);
-  generic_mourn_inferior ();
+  inf_child_mourn_inferior (ops);
+}
+
+/* Assuming we just attached the debugger to a new inferior, create
+   a new thread_info structure for each thread, and add it to our
+   list of threads.  */
+
+static void
+inf_ttrace_create_threads_after_attach (int pid)
+{
+  int status;
+  ptid_t ptid;
+  ttstate_t tts;
+  struct thread_info *ti;
+
+  status = ttrace (TT_PROC_GET_FIRST_LWP_STATE, pid, 0,
+		   (uintptr_t) &tts, sizeof (ttstate_t), 0);
+  if (status < 0)
+    perror_with_name (_("TT_PROC_GET_FIRST_LWP_STATE ttrace call failed"));
+  gdb_assert (tts.tts_pid == pid);
+
+  /* Add the stopped thread.  */
+  ptid = ptid_build (pid, tts.tts_lwpid, 0);
+  ti = add_thread (ptid);
+  ti->private = xzalloc (sizeof (struct inf_ttrace_private_thread_info));
+  inf_ttrace_num_lwps++;
+
+  /* We use the "first stopped thread" as the currently active thread.  */
+  inferior_ptid = ptid;
+
+  /* Iterative over all the remaining threads.  */
+
+  for (;;)
+    {
+      ptid_t ptid;
+
+      status = ttrace (TT_PROC_GET_NEXT_LWP_STATE, pid, 0,
+		       (uintptr_t) &tts, sizeof (ttstate_t), 0);
+      if (status < 0)
+	perror_with_name (_("TT_PROC_GET_NEXT_LWP_STATE ttrace call failed"));
+      if (status == 0)
+        break;  /* End of list.  */
+
+      ptid = ptid_build (tts.tts_pid, tts.tts_lwpid, 0);
+      ti = add_thread (ptid);
+      ti->private = xzalloc (sizeof (struct inf_ttrace_private_thread_info));
+      inf_ttrace_num_lwps++;
+    }
 }
 
 static void
-inf_ttrace_attach (struct target_ops *ops, char *args, int from_tty)
+inf_ttrace_attach (struct target_ops *ops, const char *args, int from_tty)
 {
   char *exec_file;
   pid_t pid;
@@ -738,17 +796,14 @@ inf_ttrace_attach (struct target_ops *ops, char *args, int from_tty)
 	      (uintptr_t)&tte, sizeof tte, 0) == -1)
     perror_with_name (("ttrace"));
 
-  push_target (ops);
+  if (!target_is_pushed (ops))
+    push_target (ops);
 
-  /* We'll bump inf_ttrace_num_lwps up and add the private data to the
-     thread as soon as we get to inf_ttrace_wait.  At this point, we
-     don't have lwpid info yet.  */
-  inferior_ptid = pid_to_ptid (pid);
-  add_thread_silent (inferior_ptid);
+  inf_ttrace_create_threads_after_attach (pid);
 }
 
 static void
-inf_ttrace_detach (struct target_ops *ops, char *args, int from_tty)
+inf_ttrace_detach (struct target_ops *ops, const char *args, int from_tty)
 {
   pid_t pid = ptid_get_pid (inferior_ptid);
   int sig = 0;
@@ -783,7 +838,7 @@ inf_ttrace_detach (struct target_ops *ops, char *args, int from_tty)
   inferior_ptid = null_ptid;
   detach_inferior (pid);
 
-  unpush_target (ops);
+  inf_child_maybe_unpush_target (ops);
 }
 
 static void
@@ -867,11 +922,11 @@ inf_ttrace_resume_callback (struct thread_info *info, void *arg)
 
 static void
 inf_ttrace_resume (struct target_ops *ops,
-		   ptid_t ptid, int step, enum target_signal signal)
+		   ptid_t ptid, int step, enum gdb_signal signal)
 {
   int resume_all;
   ttreq_t request = step ? TT_LWP_SINGLE : TT_LWP_CONTINUE;
-  int sig = target_signal_to_host (signal);
+  int sig = gdb_signal_to_host (signal);
   struct thread_info *info;
 
   /* A specific PTID means `step only this process id'.  */
@@ -973,7 +1028,7 @@ inf_ttrace_wait (struct target_ops *ops,
     case TTEVT_BPT_SSTEP:
       /* Make it look like a breakpoint.  */
       ourstatus->kind = TARGET_WAITKIND_STOPPED;
-      ourstatus->value.sig = TARGET_SIGNAL_TRAP;
+      ourstatus->value.sig = GDB_SIGNAL_TRAP;
       break;
 #endif
 
@@ -1089,7 +1144,7 @@ inf_ttrace_wait (struct target_ops *ops,
     case TTEVT_SIGNAL:
       ourstatus->kind = TARGET_WAITKIND_STOPPED;
       ourstatus->value.sig =
-	target_signal_from_host (tts.tts_u.tts_signal.tts_signo);
+	gdb_signal_from_host (tts.tts_u.tts_signal.tts_signo);
       break;
 
     case TTEVT_SYSCALL_ENTRY:
@@ -1172,27 +1227,38 @@ inf_ttrace_xfer_memory (CORE_ADDR addr, ULONGEST len,
   return len;
 }
 
-static LONGEST
+static enum target_xfer_status
 inf_ttrace_xfer_partial (struct target_ops *ops, enum target_object object,
 			 const char *annex, gdb_byte *readbuf,
-			 const gdb_byte *writebuf, ULONGEST offset, LONGEST len)
+			 const gdb_byte *writebuf,
+			 ULONGEST offset, ULONGEST len, ULONGEST *xfered_len)
 {
   switch (object)
     {
     case TARGET_OBJECT_MEMORY:
-      return inf_ttrace_xfer_memory (offset, len, readbuf, writebuf);
+      {
+	LONGEST val = inf_ttrace_xfer_memory (offset, len, readbuf, writebuf);
+
+	if (val == 0)
+	  return TARGET_XFER_EOF;
+	else
+	  {
+	    *xfered_len = (ULONGEST) val;
+	    return TARGET_XFER_OK;
+	  }
+      }
 
     case TARGET_OBJECT_UNWIND_TABLE:
-      return -1;
+      return TARGET_XFER_E_IO;
 
     case TARGET_OBJECT_AUXV:
-      return -1;
+      return TARGET_XFER_E_IO;
 
     case TARGET_OBJECT_WCOOKIE:
-      return -1;
+      return TARGET_XFER_E_IO;
 
     default:
-      return -1;
+      return TARGET_XFER_E_IO;
     }
 }
 
@@ -1217,7 +1283,8 @@ inf_ttrace_thread_alive (struct target_ops *ops, ptid_t ptid)
    INFO.  */
 
 static char *
-inf_ttrace_extra_thread_info (struct thread_info *info)
+inf_ttrace_extra_thread_info (struct target_ops *self,
+			      struct thread_info *info)
 {
   struct inf_ttrace_private_thread_info* private =
     (struct inf_ttrace_private_thread_info *) info->private;
@@ -1248,7 +1315,7 @@ inf_ttrace_pid_to_str (struct target_ops *ops, ptid_t ptid)
 /* Implement the get_ada_task_ptid target_ops method.  */
 
 static ptid_t
-inf_ttrace_get_ada_task_ptid (long lwp, long thread)
+inf_ttrace_get_ada_task_ptid (struct target_ops *self, long lwp, long thread)
 {
   return ptid_build (ptid_get_pid (inferior_ptid), lwp, 0);
 }
@@ -1286,7 +1353,7 @@ inf_ttrace_target (void)
 
 
 /* Prevent warning from -Wmissing-prototypes.  */
-void _initialize_hppa_hpux_nat (void);
+void _initialize_inf_ttrace (void);
 
 void
 _initialize_inf_ttrace (void)

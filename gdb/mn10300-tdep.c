@@ -1,7 +1,6 @@
 /* Target-dependent code for the Matsushita MN10300 for GDB, the GNU debugger.
 
-   Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 1996-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -23,11 +22,10 @@
 #include "dis-asm.h"
 #include "gdbtypes.h"
 #include "regcache.h"
-#include "gdb_string.h"
+#include <string.h>
 #include "gdb_assert.h"
-#include "gdbcore.h"	/* for write_memory_unsigned_integer */
+#include "gdbcore.h"	/* For write_memory_unsigned_integer.  */
 #include "value.h"
-#include "gdbtypes.h"
 #include "frame.h"
 #include "frame-unwind.h"
 #include "frame-base.h"
@@ -169,7 +167,7 @@ mn10300_use_struct_convention (struct type *type)
 
 static void
 mn10300_store_return_value (struct gdbarch *gdbarch, struct type *type,
-			    struct regcache *regcache, const void *valbuf)
+			    struct regcache *regcache, const gdb_byte *valbuf)
 {
   int len = TYPE_LENGTH (type);
   int reg, regsz;
@@ -188,7 +186,7 @@ mn10300_store_return_value (struct gdbarch *gdbarch, struct type *type,
       regcache_raw_write (regcache, reg, valbuf);
       gdb_assert (regsz == register_size (gdbarch, reg + 1));
       regcache_raw_write_part (regcache, reg+1, 0,
-			       len - regsz, (char *) valbuf + regsz);
+			       len - regsz, valbuf + regsz);
     }
   else
     internal_error (__FILE__, __LINE__,
@@ -199,7 +197,7 @@ static void
 mn10300_extract_return_value (struct gdbarch *gdbarch, struct type *type,
 			      struct regcache *regcache, void *valbuf)
 {
-  char buf[MAX_REGISTER_SIZE];
+  gdb_byte buf[MAX_REGISTER_SIZE];
   int len = TYPE_LENGTH (type);
   int reg, regsz;
 
@@ -234,7 +232,7 @@ mn10300_extract_return_value (struct gdbarch *gdbarch, struct type *type,
    from WRITEBUF into REGCACHE.  */
 
 static enum return_value_convention
-mn10300_return_value (struct gdbarch *gdbarch, struct type *func_type,
+mn10300_return_value (struct gdbarch *gdbarch, struct value *function,
 		      struct type *type, struct regcache *regcache,
 		      gdb_byte *readbuf, const gdb_byte *writebuf)
 {
@@ -327,11 +325,11 @@ mn10300_write_pc (struct regcache *regcache, CORE_ADDR val)
    so we need a single byte breakpoint.  Matsushita hasn't defined
    one, so we defined it ourselves.  */
 
-const static unsigned char *
+static const unsigned char *
 mn10300_breakpoint_from_pc (struct gdbarch *gdbarch, CORE_ADDR *bp_addr,
 			    int *bp_size)
 {
-  static char breakpoint[] = {0xff};
+  static gdb_byte breakpoint[] = {0xff};
   *bp_size = 1;
   return breakpoint;
 }
@@ -388,7 +386,7 @@ mn10300_analyze_prologue (struct gdbarch *gdbarch,
                           struct mn10300_prologue *result)
 {
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
-  CORE_ADDR pc, next_pc;
+  CORE_ADDR pc;
   int rn;
   pv_t regs[MN10300_MAX_NUM_REGS];
   struct pv_area *stack;
@@ -1062,7 +1060,7 @@ mn10300_analyze_prologue (struct gdbarch *gdbarch,
 static CORE_ADDR
 mn10300_skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc)
 {
-  char *name;
+  const char *name;
   CORE_ADDR func_addr, func_end;
   struct mn10300_prologue p;
 
@@ -1142,7 +1140,8 @@ mn10300_frame_this_id (struct frame_info *this_frame,
 		       void **this_prologue_cache,
 		       struct frame_id *this_id)
 {
-  *this_id = frame_id_build (mn10300_frame_base (this_frame, this_prologue_cache),
+  *this_id = frame_id_build (mn10300_frame_base (this_frame,
+						 this_prologue_cache),
 			     get_frame_func (this_frame));
 
 }
@@ -1173,6 +1172,7 @@ mn10300_frame_prev_register (struct frame_info *this_frame,
 
 static const struct frame_unwind mn10300_frame_unwind = {
   NORMAL_FRAME,
+  default_frame_unwind_stop_reason,
   mn10300_frame_this_id, 
   mn10300_frame_prev_register,
   NULL,
@@ -1230,7 +1230,8 @@ mn10300_push_dummy_call (struct gdbarch *gdbarch,
   int len, arg_len; 
   int stack_offset = 0;
   int argnum;
-  char *val, valbuf[MAX_REGISTER_SIZE];
+  const gdb_byte *val;
+  gdb_byte valbuf[MAX_REGISTER_SIZE];
 
   /* This should be a nop, but align the stack just in case something
      went wrong.  Stacks are four byte aligned on the mn10300.  */
@@ -1263,7 +1264,7 @@ mn10300_push_dummy_call (struct gdbarch *gdbarch,
   else
     regs_used = 0;
 
-  /* Push all arguments onto the stack. */
+  /* Push all arguments onto the stack.  */
   for (argnum = 0; argnum < nargs; argnum++)
     {
       /* FIXME what about structs?  Unions?  */
@@ -1279,7 +1280,7 @@ mn10300_push_dummy_call (struct gdbarch *gdbarch,
       else
 	{
 	  arg_len = TYPE_LENGTH (value_type (*args));
-	  val = (char *) value_contents (*args);
+	  val = value_contents (*args);
 	}
 
       while (regs_used < 2 && arg_len > 0)
@@ -1332,7 +1333,7 @@ mn10300_push_dummy_call (struct gdbarch *gdbarch,
      Note that we don't update the return value though because that's
      the value of the stack just after pushing the arguments, but prior
      to performing the call.  This value is needed in order to
-     construct the frame ID of the dummy call.   */
+     construct the frame ID of the dummy call.  */
   {
     CORE_ADDR func_addr = find_function_addr (target_func, NULL);
     CORE_ADDR unwound_sp 
@@ -1360,13 +1361,26 @@ mn10300_dwarf2_reg_to_regnum (struct gdbarch *gdbarch, int dwarf2)
      appear in GCC's numbering, but have no counterpart in GDB's
      world, are marked with a -1.  */
   static int dwarf2_to_gdb[] = {
-    0,  1,  2,  3,  4,  5,  6,  7, -1, 8,
-    15, 16, 17, 18, 19, 20, 21, 22,
-    32, 33, 34, 35, 36, 37, 38, 39,
-    40, 41, 42, 43, 44, 45, 46, 47,
-    48, 49, 50, 51, 52, 53, 54, 55,
-    56, 57, 58, 59, 60, 61, 62, 63,
-    9, 11
+    E_D0_REGNUM, E_D1_REGNUM, E_D2_REGNUM, E_D3_REGNUM,
+    E_A0_REGNUM, E_A1_REGNUM, E_A2_REGNUM, E_A3_REGNUM,
+    -1, E_SP_REGNUM,
+
+    E_E0_REGNUM, E_E1_REGNUM, E_E2_REGNUM, E_E3_REGNUM,
+    E_E4_REGNUM, E_E5_REGNUM, E_E6_REGNUM, E_E7_REGNUM,
+
+    E_FS0_REGNUM + 0, E_FS0_REGNUM + 1, E_FS0_REGNUM + 2, E_FS0_REGNUM + 3,
+    E_FS0_REGNUM + 4, E_FS0_REGNUM + 5, E_FS0_REGNUM + 6, E_FS0_REGNUM + 7,
+
+    E_FS0_REGNUM + 8, E_FS0_REGNUM + 9, E_FS0_REGNUM + 10, E_FS0_REGNUM + 11,
+    E_FS0_REGNUM + 12, E_FS0_REGNUM + 13, E_FS0_REGNUM + 14, E_FS0_REGNUM + 15,
+
+    E_FS0_REGNUM + 16, E_FS0_REGNUM + 17, E_FS0_REGNUM + 18, E_FS0_REGNUM + 19,
+    E_FS0_REGNUM + 20, E_FS0_REGNUM + 21, E_FS0_REGNUM + 22, E_FS0_REGNUM + 23,
+
+    E_FS0_REGNUM + 24, E_FS0_REGNUM + 25, E_FS0_REGNUM + 26, E_FS0_REGNUM + 27,
+    E_FS0_REGNUM + 28, E_FS0_REGNUM + 29, E_FS0_REGNUM + 30, E_FS0_REGNUM + 31,
+
+    E_MDR_REGNUM, E_PSW_REGNUM, E_PC_REGNUM
   };
 
   if (dwarf2 < 0
@@ -1436,7 +1450,7 @@ mn10300_gdbarch_init (struct gdbarch_info info,
   set_gdbarch_inner_than (gdbarch, core_addr_lessthan);
   /* Breakpoints.  */
   set_gdbarch_breakpoint_from_pc (gdbarch, mn10300_breakpoint_from_pc);
-  /* decr_pc_after_break? */
+  /* decr_pc_after_break?  */
   /* Disassembly.  */
   set_gdbarch_print_insn (gdbarch, print_insn_mn10300);
 
@@ -1456,7 +1470,7 @@ mn10300_gdbarch_init (struct gdbarch_info info,
   return gdbarch;
 }
  
-/* Dump out the mn10300 specific architecture information. */
+/* Dump out the mn10300 specific architecture information.  */
 
 static void
 mn10300_dump_tdep (struct gdbarch *gdbarch, struct ui_file *file)

@@ -1,5 +1,5 @@
 /* SPU native-dependent code for GDB, the GNU debugger.
-   Copyright (C) 2006, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2006-2014 Free Software Foundation, Inc.
 
    Contributed by Ulrich Weigand <uweigand@de.ibm.com>.
 
@@ -20,19 +20,20 @@
 
 #include "defs.h"
 #include "gdbcore.h"
-#include "gdb_string.h"
+#include <string.h>
 #include "target.h"
 #include "inferior.h"
+#include "inf-child.h"
 #include "inf-ptrace.h"
 #include "regcache.h"
 #include "symfile.h"
 #include "gdb_wait.h"
 #include "gdbthread.h"
+#include "gdb_bfd.h"
 
 #include <sys/ptrace.h>
 #include <asm/ptrace.h>
 #include <sys/types.h>
-#include <sys/param.h>
 
 #include "spu-tdep.h"
 
@@ -47,9 +48,9 @@ fetch_ppc_register (int regno)
 {
   PTRACE_TYPE_RET res;
 
-  int tid = TIDGET (inferior_ptid);
+  int tid = ptid_get_lwp (inferior_ptid);
   if (tid == 0)
-    tid = PIDGET (inferior_ptid);
+    tid = ptid_get_pid (inferior_ptid);
 
 #ifndef __powerpc64__
   /* If running as a 32-bit process on a 64-bit system, we attempt
@@ -132,9 +133,9 @@ fetch_ppc_memory (ULONGEST memaddr, gdb_byte *myaddr, int len)
 	       / sizeof (PTRACE_TYPE_RET));
   PTRACE_TYPE_RET *buffer;
 
-  int tid = TIDGET (inferior_ptid);
+  int tid = ptid_get_lwp (inferior_ptid);
   if (tid == 0)
-    tid = PIDGET (inferior_ptid);
+    tid = ptid_get_pid (inferior_ptid);
 
   buffer = (PTRACE_TYPE_RET *) alloca (count * sizeof (PTRACE_TYPE_RET));
   for (i = 0; i < count; i++, addr += sizeof (PTRACE_TYPE_RET))
@@ -162,9 +163,9 @@ store_ppc_memory (ULONGEST memaddr, const gdb_byte *myaddr, int len)
 	       / sizeof (PTRACE_TYPE_RET));
   PTRACE_TYPE_RET *buffer;
 
-  int tid = TIDGET (inferior_ptid);
+  int tid = ptid_get_lwp (inferior_ptid);
   if (tid == 0)
-    tid = PIDGET (inferior_ptid);
+    tid = ptid_get_pid (inferior_ptid);
 
   buffer = (PTRACE_TYPE_RET *) alloca (count * sizeof (PTRACE_TYPE_RET));
 
@@ -204,7 +205,7 @@ store_ppc_memory (ULONGEST memaddr, const gdb_byte *myaddr, int len)
 static int 
 parse_spufs_run (int *fd, ULONGEST *addr)
 {
-  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch);
+  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch ());
   gdb_byte buf[4];
   ULONGEST pc = fetch_ppc_register (32);  /* nip */
 
@@ -225,31 +226,33 @@ parse_spufs_run (int *fd, ULONGEST *addr)
 }
 
 
-/* Copy LEN bytes at OFFSET in spufs file ANNEX into/from READBUF or WRITEBUF,
+/* Implement the to_xfer_partial target_ops method for TARGET_OBJECT_SPU.
+   Copy LEN bytes at OFFSET in spufs file ANNEX into/from READBUF or WRITEBUF,
    using the /proc file system.  */
-static LONGEST
+
+static enum target_xfer_status
 spu_proc_xfer_spu (const char *annex, gdb_byte *readbuf,
 		   const gdb_byte *writebuf,
-		   ULONGEST offset, LONGEST len)
+		   ULONGEST offset, ULONGEST len, ULONGEST *xfered_len)
 {
   char buf[128];
   int fd = 0;
   int ret = -1;
-  int pid = PIDGET (inferior_ptid);
+  int pid = ptid_get_pid (inferior_ptid);
 
   if (!annex)
-    return 0;
+    return TARGET_XFER_EOF;
 
   xsnprintf (buf, sizeof buf, "/proc/%d/fd/%s", pid, annex);
   fd = open (buf, writebuf? O_WRONLY : O_RDONLY);
   if (fd <= 0)
-    return -1;
+    return TARGET_XFER_E_IO;
 
   if (offset != 0
       && lseek (fd, (off_t) offset, SEEK_SET) != (off_t) offset)
     {
       close (fd);
-      return 0;
+      return TARGET_XFER_EOF;
     }
 
   if (writebuf)
@@ -258,7 +261,15 @@ spu_proc_xfer_spu (const char *annex, gdb_byte *readbuf,
     ret = read (fd, readbuf, (size_t) len);
 
   close (fd);
-  return ret;
+  if (ret < 0)
+    return TARGET_XFER_E_IO;
+  else if (ret == 0)
+    return TARGET_XFER_EOF;
+  else
+    {
+      *xfered_len = (ULONGEST) ret;
+      return TARGET_XFER_OK;
+    }
 }
 
 
@@ -275,7 +286,9 @@ static int
 spu_bfd_iovec_close (struct bfd *nbfd, void *stream)
 {
   xfree (stream);
-  return 1;
+
+  /* Zero means success.  */
+  return 0;
 }
 
 static file_ptr
@@ -314,16 +327,16 @@ spu_bfd_open (ULONGEST addr)
   ULONGEST *open_closure = xmalloc (sizeof (ULONGEST));
   *open_closure = addr;
 
-  nbfd = bfd_openr_iovec (xstrdup ("<in-memory>"), "elf32-spu",
-			  spu_bfd_iovec_open, open_closure,
-			  spu_bfd_iovec_pread, spu_bfd_iovec_close,
-			  spu_bfd_iovec_stat);
+  nbfd = gdb_bfd_openr_iovec ("<in-memory>", "elf32-spu",
+			      spu_bfd_iovec_open, open_closure,
+			      spu_bfd_iovec_pread, spu_bfd_iovec_close,
+			      spu_bfd_iovec_stat);
   if (!nbfd)
     return NULL;
 
   if (!bfd_check_format (nbfd, bfd_object))
     {
-      bfd_close (nbfd);
+      gdb_bfd_unref (nbfd);
       return NULL;
     }
 
@@ -356,39 +369,46 @@ spu_symbol_file_add_from_memory (int inferior_fd)
   ULONGEST addr;
   struct bfd *nbfd;
 
-  char id[128];
+  gdb_byte id[128];
   char annex[32];
-  int len;
+  ULONGEST len;
+  enum target_xfer_status status;
 
   /* Read object ID.  */
   xsnprintf (annex, sizeof annex, "%d/object-id", inferior_fd);
-  len = spu_proc_xfer_spu (annex, id, NULL, 0, sizeof id);
-  if (len <= 0 || len >= sizeof id)
+  status = spu_proc_xfer_spu (annex, id, NULL, 0, sizeof id, &len);
+  if (status != TARGET_XFER_OK || len >= sizeof id)
     return;
   id[len] = 0;
-  addr = strtoulst (id, NULL, 16);
+  addr = strtoulst ((const char *) id, NULL, 16);
   if (!addr)
     return;
 
   /* Open BFD representing SPE executable and read its symbols.  */
   nbfd = spu_bfd_open (addr);
   if (nbfd)
-    symbol_file_add_from_bfd (nbfd, SYMFILE_VERBOSE | SYMFILE_MAINLINE,
-                              NULL, 0);
+    {
+      struct cleanup *cleanup = make_cleanup_bfd_unref (nbfd);
+
+      symbol_file_add_from_bfd (nbfd, bfd_get_filename (nbfd),
+				SYMFILE_VERBOSE | SYMFILE_MAINLINE,
+				NULL, 0, NULL);
+      do_cleanups (cleanup);
+    }
 }
 
 
 /* Override the post_startup_inferior routine to continue running
    the inferior until the first spu_run system call.  */
 static void
-spu_child_post_startup_inferior (ptid_t ptid)
+spu_child_post_startup_inferior (struct target_ops *self, ptid_t ptid)
 {
   int fd;
   ULONGEST addr;
 
-  int tid = TIDGET (ptid);
+  int tid = ptid_get_lwp (ptid);
   if (tid == 0)
-    tid = PIDGET (ptid);
+    tid = ptid_get_pid (ptid);
   
   while (!parse_spufs_run (&fd, &addr))
     {
@@ -400,7 +420,7 @@ spu_child_post_startup_inferior (ptid_t ptid)
 /* Override the post_attach routine to try load the SPE executable
    file image from its copy inside the target process.  */
 static void
-spu_child_post_attach (int pid)
+spu_child_post_attach (struct target_ops *self, int pid)
 {
   int fd;
   ULONGEST addr;
@@ -435,16 +455,17 @@ spu_child_wait (struct target_ops *ops,
       set_sigint_trap ();	/* Causes SIGINT to be passed on to the
 				   attached process.  */
 
-      pid = waitpid (PIDGET (ptid), &status, 0);
+      pid = waitpid (ptid_get_pid (ptid), &status, 0);
       if (pid == -1 && errno == ECHILD)
 	/* Try again with __WCLONE to check cloned processes.  */
-	pid = waitpid (PIDGET (ptid), &status, __WCLONE);
+	pid = waitpid (ptid_get_pid (ptid), &status, __WCLONE);
 
       save_errno = errno;
 
       /* Make sure we don't report an event for the exit of the
          original program, if we've detached from it.  */
-      if (pid != -1 && !WIFSTOPPED (status) && pid != PIDGET (inferior_ptid))
+      if (pid != -1 && !WIFSTOPPED (status)
+	  && pid != ptid_get_pid (inferior_ptid))
 	{
 	  pid = -1;
 	  save_errno = EINTR;
@@ -461,7 +482,7 @@ spu_child_wait (struct target_ops *ops,
 
       /* Claim it exited with unknown signal.  */
       ourstatus->kind = TARGET_WAITKIND_SIGNALLED;
-      ourstatus->value.sig = TARGET_SIGNAL_UNKNOWN;
+      ourstatus->value.sig = GDB_SIGNAL_UNKNOWN;
       return inferior_ptid;
     }
 
@@ -486,7 +507,7 @@ spu_fetch_inferior_registers (struct target_ops *ops,
     {
       struct gdbarch *gdbarch = get_regcache_arch (regcache);
       enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
-      char buf[4];
+      gdb_byte buf[4];
       store_unsigned_integer (buf, 4, byte_order, fd);
       regcache_raw_supply (regcache, SPU_ID_REGNUM, buf);
     }
@@ -505,9 +526,12 @@ spu_fetch_inferior_registers (struct target_ops *ops,
       gdb_byte buf[16 * SPU_NUM_GPRS];
       char annex[32];
       int i;
+      ULONGEST len;
 
       xsnprintf (annex, sizeof annex, "%d/regs", fd);
-      if (spu_proc_xfer_spu (annex, buf, NULL, 0, sizeof buf) == sizeof buf)
+      if ((spu_proc_xfer_spu (annex, buf, NULL, 0, sizeof buf, &len)
+	   == TARGET_XFER_OK)
+	  && len == sizeof buf)
 	for (i = 0; i < SPU_NUM_GPRS; i++)
 	  regcache_raw_supply (regcache, i, buf + i*16);
     }
@@ -539,24 +563,26 @@ spu_store_inferior_registers (struct target_ops *ops,
       gdb_byte buf[16 * SPU_NUM_GPRS];
       char annex[32];
       int i;
+      ULONGEST len;
 
       for (i = 0; i < SPU_NUM_GPRS; i++)
 	regcache_raw_collect (regcache, i, buf + i*16);
 
       xsnprintf (annex, sizeof annex, "%d/regs", fd);
-      spu_proc_xfer_spu (annex, NULL, buf, 0, sizeof buf);
+      spu_proc_xfer_spu (annex, NULL, buf, 0, sizeof buf, &len);
     }
 }
 
 /* Override the to_xfer_partial routine.  */
-static LONGEST 
+static enum target_xfer_status
 spu_xfer_partial (struct target_ops *ops,
 		  enum target_object object, const char *annex,
 		  gdb_byte *readbuf, const gdb_byte *writebuf,
-		  ULONGEST offset, LONGEST len)
+		  ULONGEST offset, ULONGEST len, ULONGEST *xfered_len)
 {
   if (object == TARGET_OBJECT_SPU)
-    return spu_proc_xfer_spu (annex, readbuf, writebuf, offset, len);
+    return spu_proc_xfer_spu (annex, readbuf, writebuf, offset, len,
+			      xfered_len);
 
   if (object == TARGET_OBJECT_MEMORY)
     {
@@ -565,16 +591,17 @@ spu_xfer_partial (struct target_ops *ops,
       char mem_annex[32], lslr_annex[32];
       gdb_byte buf[32];
       ULONGEST lslr;
-      LONGEST ret;
+      enum target_xfer_status ret;
 
       /* We must be stopped on a spu_run system call.  */
       if (!parse_spufs_run (&fd, &addr))
-	return 0;
+	return TARGET_XFER_EOF;
 
       /* Use the "mem" spufs file to access SPU local store.  */
       xsnprintf (mem_annex, sizeof mem_annex, "%d/mem", fd);
-      ret = spu_proc_xfer_spu (mem_annex, readbuf, writebuf, offset, len);
-      if (ret > 0)
+      ret = spu_proc_xfer_spu (mem_annex, readbuf, writebuf, offset, len,
+			       xfered_len);
+      if (ret == TARGET_XFER_OK)
 	return ret;
 
       /* SPU local store access wraps the address around at the
@@ -583,24 +610,28 @@ spu_xfer_partial (struct target_ops *ops,
 	 trying the original address first, and getting end-of-file.  */
       xsnprintf (lslr_annex, sizeof lslr_annex, "%d/lslr", fd);
       memset (buf, 0, sizeof buf);
-      if (spu_proc_xfer_spu (lslr_annex, buf, NULL, 0, sizeof buf) <= 0)
+      if (spu_proc_xfer_spu (lslr_annex, buf, NULL, 0, sizeof buf, xfered_len)
+	  != TARGET_XFER_OK)
 	return ret;
 
-      lslr = strtoulst (buf, NULL, 16);
+      lslr = strtoulst ((const char *) buf, NULL, 16);
       return spu_proc_xfer_spu (mem_annex, readbuf, writebuf,
-				offset & lslr, len);
+				offset & lslr, len, xfered_len);
     }
 
-  return -1;
+  return TARGET_XFER_E_IO;
 }
 
 /* Override the to_can_use_hw_breakpoint routine.  */
 static int
-spu_can_use_hw_breakpoint (int type, int cnt, int othertype)
+spu_can_use_hw_breakpoint (struct target_ops *self,
+			   int type, int cnt, int othertype)
 {
   return 0;
 }
 
+/* -Wmissing-prototypes */
+extern initialize_file_ftype _initialize_spu_nat;
 
 /* Initialize SPU native target.  */
 void 

@@ -1,6 +1,6 @@
 /* TUI Interpreter definitions for GDB, the GNU debugger.
 
-   Copyright (C) 2003, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2003-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -30,10 +30,17 @@
 #include "tui/tui.h"
 #include "tui/tui-io.h"
 #include "exceptions.h"
+#include "infrun.h"
+#include "observer.h"
+
+static struct ui_out *tui_ui_out (struct interp *self);
 
 /* Set to 1 when the TUI mode must be activated when we first start
    gdb.  */
 static int tui_start_enabled = 0;
+
+/* The TUI interpreter.  */
+static struct interp *tui_interp;
 
 /* Cleanup the tui before exiting.  */
 
@@ -48,10 +55,77 @@ tui_exit (void)
 /* True if TUI is the top-level interpreter.  */
 static int tui_is_toplevel = 0;
 
+/* Observers for several run control events.  If the interpreter is
+   quiet (i.e., another interpreter is being run with
+   interpreter-exec), print nothing.  */
+
+/* Observer for the signal_received notification.  */
+
+static void
+tui_on_signal_received (enum gdb_signal siggnal)
+{
+  if (!interp_quiet_p (tui_interp))
+    print_signal_received_reason (tui_ui_out (tui_interp), siggnal);
+}
+
+/* Observer for the end_stepping_range notification.  */
+
+static void
+tui_on_end_stepping_range (void)
+{
+  if (!interp_quiet_p (tui_interp))
+    print_end_stepping_range_reason (tui_ui_out (tui_interp));
+}
+
+/* Observer for the signal_exited notification.  */
+
+static void
+tui_on_signal_exited (enum gdb_signal siggnal)
+{
+  if (!interp_quiet_p (tui_interp))
+    print_signal_exited_reason (tui_ui_out (tui_interp), siggnal);
+}
+
+/* Observer for the exited notification.  */
+
+static void
+tui_on_exited (int exitstatus)
+{
+  if (!interp_quiet_p (tui_interp))
+    print_exited_reason (tui_ui_out (tui_interp), exitstatus);
+}
+
+/* Observer for the no_history notification.  */
+
+static void
+tui_on_no_history (void)
+{
+  if (!interp_quiet_p (tui_interp))
+    print_no_history_reason (tui_ui_out (tui_interp));
+}
+
+/* Observer for the sync_execution_done notification.  */
+
+static void
+tui_on_sync_execution_done (void)
+{
+  if (!interp_quiet_p (tui_interp))
+    display_gdb_prompt (NULL);
+}
+
+/* Observer for the command_error notification.  */
+
+static void
+tui_on_command_error (void)
+{
+  if (!interp_quiet_p (tui_interp))
+    display_gdb_prompt (NULL);
+}
+
 /* These implement the TUI interpreter.  */
 
 static void *
-tui_init (int top_level)
+tui_init (struct interp *self, int top_level)
 {
   tui_is_toplevel = top_level;
 
@@ -64,6 +138,15 @@ tui_init (int top_level)
   tui_initialize_win ();
   if (ui_file_isatty (gdb_stdout))
     tui_initialize_readline ();
+
+  /* If changing this, remember to update cli-interp.c as well.  */
+  observer_attach_signal_received (tui_on_signal_received);
+  observer_attach_end_stepping_range (tui_on_end_stepping_range);
+  observer_attach_signal_exited (tui_on_signal_exited);
+  observer_attach_exited (tui_on_exited);
+  observer_attach_no_history (tui_on_no_history);
+  observer_attach_sync_execution_done (tui_on_sync_execution_done);
+  observer_attach_command_error (tui_on_command_error);
 
   return NULL;
 }
@@ -114,99 +197,19 @@ tui_suspend (void *data)
   return 1;
 }
 
-/* Display the prompt if we are silent.  */
-
-static int
-tui_display_prompt_p (void *data)
+static struct ui_out *
+tui_ui_out (struct interp *self)
 {
-  if (interp_quiet_p (NULL))
-    return 0;
+  if (tui_active)
+    return tui_out;
   else
-    return 1;
+    return tui_old_uiout;
 }
 
 static struct gdb_exception
 tui_exec (void *data, const char *command_str)
 {
   internal_error (__FILE__, __LINE__, _("tui_exec called"));
-}
-
-
-/* Initialize all the necessary variables, start the event loop,
-   register readline, and stdin, start the loop.  */
-
-static void
-tui_command_loop (void *data)
-{
-  /* If we are using readline, set things up and display the first
-     prompt, otherwise just print the prompt.  */
-  if (async_command_editing_p)
-    {
-      int length;
-      char *a_prompt;
-      char *gdb_prompt = get_prompt ();
-
-      /* Tell readline what the prompt to display is and what function
-         it will need to call after a whole line is read. This also
-         displays the first prompt.  */
-      length = strlen (PREFIX (0)) 
-	+ strlen (gdb_prompt) + strlen (SUFFIX (0)) + 1;
-      a_prompt = (char *) alloca (length);
-      strcpy (a_prompt, PREFIX (0));
-      strcat (a_prompt, gdb_prompt);
-      strcat (a_prompt, SUFFIX (0));
-      rl_callback_handler_install (a_prompt, input_handler);
-    }
-  else
-    display_gdb_prompt (0);
-
-  /* Loop until there is nothing to do. This is the entry point to the
-     event loop engine. gdb_do_one_event, called via catch_errors()
-     will process one event for each invocation.  It blocks waits for
-     an event and then processes it.  >0 when an event is processed, 0
-     when catch_errors() caught an error and <0 when there are no
-     longer any event sources registered.  */
-  while (1)
-    {
-      int result = catch_errors (gdb_do_one_event, 0, "", RETURN_MASK_ALL);
-
-      if (result < 0)
-	break;
-
-      /* Update gdb output according to TUI mode.  Since catch_errors
-         preserves the uiout from changing, this must be done at top
-         level of event loop.  */
-      if (tui_active)
-        uiout = tui_out;
-      else
-        uiout = tui_old_uiout;
-      
-      if (result == 0)
-	{
-	  /* If any exception escaped to here, we better enable
-	     stdin.  Otherwise, any command that calls async_disable_stdin,
-	     and then throws, will leave stdin inoperable.  */
-	  async_enable_stdin ();
-	  /* FIXME: this should really be a call to a hook that is
-	     interface specific, because interfaces can display the
-	     prompt in their own way.  */
-	  display_gdb_prompt (0);
-	  /* This call looks bizarre, but it is required.  If the user
-	     entered a command that caused an error,
-	     after_char_processing_hook won't be called from
-	     rl_callback_read_char_wrapper.  Using a cleanup there
-	     won't work, since we want this function to be called
-	     after a new prompt is printed.  */
-	  if (after_char_processing_hook)
-	    (*after_char_processing_hook) ();
-	  /* Maybe better to set a flag to be checked somewhere as to
-	     whether display the prompt or not.  */
-	}
-    }
-
-  /* We are done with the event loop. There are no more event sources
-     to listen to.  So we exit GDB.  */
-  return;
 }
 
 /* Provide a prototype to silence -Wmissing-prototypes.  */
@@ -220,13 +223,14 @@ _initialize_tui_interp (void)
     tui_resume,
     tui_suspend,
     tui_exec,
-    tui_display_prompt_p,
-    tui_command_loop,
+    tui_ui_out,
+    NULL,
+    cli_command_loop
   };
 
   /* Create a default uiout builder for the TUI.  */
-  tui_out = tui_out_new (gdb_stdout);
-  interp_add (interp_new (INTERP_TUI, NULL, tui_out, &procs));
+  tui_interp = interp_new (INTERP_TUI, &procs);
+  interp_add (tui_interp);
   if (interpreter_p && strcmp (interpreter_p, INTERP_TUI) == 0)
     tui_start_enabled = 1;
 

@@ -3,7 +3,7 @@
  
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
+    the Free Software Foundation; either version 3 of the License, or
     (at your option) any later version.
  
     This program is distributed in the hope that it will be useful,
@@ -12,10 +12,13 @@
     GNU General Public License for more details.
  
     You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA. */
+    along with this program; if not, see <http://www.gnu.org/licenses/>. */
 
 extern ARMword isize;
+extern int trace;
+extern int disas;
+extern int trace_funcs;
+extern void print_insn (ARMword);
 
 /* Condition code values.  */
 #define EQ 0
@@ -47,6 +50,10 @@ extern ARMword isize;
 #define CBIT (1L << 29)
 #define VBIT (1L << 28)
 #define SBIT (1L << 27)
+#define GE0 (1L << 16)
+#define GE1 (1L << 17)
+#define GE2 (1L << 18)
+#define GE3 (1L << 19)
 #define IBIT (1L << 7)
 #define FBIT (1L << 6)
 #define IFBITS (3L << 6)
@@ -403,7 +410,7 @@ extern ARMword isize;
   do						\
     {						\
       if (DESTReg == 15)			\
-	WriteR15Branch (state, d);		\
+	WriteR15Load (state, d);		\
       else					\
 	DEST = d;				\
     }						\

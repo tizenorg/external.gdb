@@ -1,7 +1,6 @@
 /* Target-dependent code for the i387.
 
-   Copyright (C) 2000, 2001, 2002, 2003, 2004, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2000-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -32,9 +31,25 @@ struct ui_file;
 
 #define I387_ST0_REGNUM(tdep) ((tdep)->st0_regnum)
 #define I387_NUM_XMM_REGS(tdep) ((tdep)->num_xmm_regs)
+#define I387_NUM_XMM_AVX512_REGS(tdep) ((tdep)->num_xmm_avx512_regs)
 #define I387_MM0_REGNUM(tdep) ((tdep)->mm0_regnum)
 #define I387_NUM_YMM_REGS(tdep) ((tdep)->num_ymm_regs)
 #define I387_YMM0H_REGNUM(tdep) ((tdep)->ymm0h_regnum)
+
+#define I387_BND0R_REGNUM(tdep) ((tdep)->bnd0r_regnum)
+#define I387_BNDCFGU_REGNUM(tdep) ((tdep)->bndcfgu_regnum)
+
+/* Set of constants used for 32 and 64-bit.  */
+#define I387_NUM_MPX_REGS 6
+#define I387_NUM_BND_REGS 4
+#define I387_NUM_MPX_CTRL_REGS 2
+#define I387_NUM_K_REGS 8
+
+#define I387_K0_REGNUM(tdep) ((tdep)->k0_regnum)
+#define I387_NUM_ZMMH_REGS(tdep) ((tdep)->num_zmm_regs)
+#define I387_ZMM0H_REGNUM(tdep) ((tdep)->zmm0h_regnum)
+#define I387_NUM_YMM_AVX512_REGS(tdep) ((tdep)->num_ymm_avx512_regs)
+#define I387_YMM16H_REGNUM(tdep) ((tdep)->ymm16h_regnum)
 
 #define I387_FCTRL_REGNUM(tdep) (I387_ST0_REGNUM (tdep) + 8)
 #define I387_FSTAT_REGNUM(tdep) (I387_FCTRL_REGNUM (tdep) + 1)
@@ -45,10 +60,24 @@ struct ui_file;
 #define I387_FOOFF_REGNUM(tdep) (I387_FCTRL_REGNUM (tdep) + 6)
 #define I387_FOP_REGNUM(tdep) (I387_FCTRL_REGNUM (tdep) + 7)
 #define I387_XMM0_REGNUM(tdep) (I387_ST0_REGNUM (tdep) + 16)
+#define I387_XMM16_REGNUM(tdep) ((tdep)->xmm16_regnum)
 #define I387_MXCSR_REGNUM(tdep) \
   (I387_XMM0_REGNUM (tdep) + I387_NUM_XMM_REGS (tdep))
+#define I387_YMM0_REGNUM(tdep) (I387_MXCSR_REGNUM(tdep) + 1)
 #define I387_YMMENDH_REGNUM(tdep) \
   (I387_YMM0H_REGNUM (tdep) + I387_NUM_YMM_REGS (tdep))
+
+#define I387_MPXEND_REGNUM(tdep) \
+  (I387_BND0R_REGNUM (tdep) + I387_NUM_MPX_REGS)
+
+#define I387_KEND_REGNUM(tdep) \
+  (I387_K0_REGNUM (tdep) + I387_NUM_K_REGS)
+#define I387_ZMMENDH_REGNUM(tdep) \
+  (I387_ZMM0H_REGNUM (tdep) + I387_NUM_ZMMH_REGS (tdep))
+#define I387_YMMH_AVX512_END_REGNUM(tdep) \
+  (I387_YMM16H_REGNUM (tdep) + I387_NUM_YMM_AVX512_REGS (tdep))
+#define I387_XMM_AVX512_END_REGNUM(tdep) \
+  (I387_XMM16_REGNUM (tdep) + I387_NUM_XMM_AVX512_REGS (tdep))
 
 /* Print out the i387 floating point state.  */
 
@@ -66,8 +95,9 @@ extern int i387_convert_register_p (struct gdbarch *gdbarch, int regnum,
 /* Read a value of type TYPE from register REGNUM in frame FRAME, and
    return its contents in TO.  */
 
-extern void i387_register_to_value (struct frame_info *frame, int regnum,
-				    struct type *type, gdb_byte *to);
+extern int i387_register_to_value (struct frame_info *frame, int regnum,
+				   struct type *type, gdb_byte *to,
+				   int *optimizedp, int *unavailablep);
 
 /* Write the contents FROM of a value of type TYPE into register
    REGNUM in frame FRAME.  */

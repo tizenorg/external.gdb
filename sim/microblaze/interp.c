@@ -1,11 +1,11 @@
 /* Simulator for Xilinx MicroBlaze processor
-   Copyright 2009, 2010 Free Software Foundation, Inc.
+   Copyright 2009-2014 Free Software Foundation, Inc.
 
    This file is part of GDB, the GNU debugger.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
-   the Free Software Foundation; either version 2 of the License, or
+   the Free Software Foundation; either version 3 of the License, or
    (at your option) any later version.
 
    This program is distributed in the hope that it will be useful,
@@ -14,10 +14,9 @@
    GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA
-   02110-1301, USA.  */
+   along with this program; if not, see <http://www.gnu.org/licenses/>.  */
 
+#include "config.h"
 #include <signal.h>
 #include "sysdep.h"
 #include <sys/times.h>
@@ -369,12 +368,6 @@ set_initial_gprs ()
 
 }
 
-static void
-interrupt ()
-{
-  CPU.exception = SIGINT;
-}
-
 /* Functions so that trapped open/close don't interfere with the
    parent's functions.  We say that we can't close the descriptors
    that we didn't open.  exit() and cleanup() get in trouble here,
@@ -516,7 +509,6 @@ sim_resume (SIM_DESC sd, int step, int siggnal)
   int needfetch;
   word inst;
   enum microblaze_instr op;
-  void (*sigsave)();
   int memops;
   int bonus_cycles;
   int insts;
@@ -533,7 +525,6 @@ sim_resume (SIM_DESC sd, int step, int siggnal)
   short num_delay_slot; /* UNUSED except as reqd parameter */
   enum microblaze_instr_type insn_type;
 
-  sigsave = signal (SIGINT, interrupt);
   CPU.exception = step ? SIGTRAP : 0;
 
   memops = 0;
@@ -698,8 +689,6 @@ sim_resume (SIM_DESC sd, int step, int siggnal)
   CPU.cycles += insts;		/* and each takes a cycle */
   CPU.cycles += bonus_cycles;	/* and extra cycles for branches */
   CPU.cycles += memops; 	/* and memop cycle delays */
-
-  signal (SIGINT, sigsave);
 }
 
 
@@ -898,7 +887,7 @@ sim_close (SIM_DESC sd, int quitting)
 }
 
 SIM_RC
-sim_load (SIM_DESC sd, char *prog, bfd *abfd, int from_tty)
+sim_load (SIM_DESC sd, const char *prog, bfd *abfd, int from_tty)
 {
   /* Do the right thing for ELF executables; this turns out to be
      just about the right thing for any object format that:
@@ -1017,7 +1006,7 @@ sim_kill (SIM_DESC sd)
 }
 
 void
-sim_do_command (SIM_DESC sd, char * cmd)
+sim_do_command (SIM_DESC sd, const char *cmd)
 {
   /* Nothing there yet; it's all an error.  */
 
@@ -1088,4 +1077,10 @@ void
 sim_set_callbacks (host_callback *ptr)
 {
   callback = ptr;
+}
+
+char **
+sim_complete_command (SIM_DESC sd, const char *text, const char *word)
+{
+  return NULL;
 }

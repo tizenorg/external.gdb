@@ -1,6 +1,5 @@
 /* YACC grammar for Modula-2 expressions, for GDB.
-   Copyright (C) 1986, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1999,
-   2000, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 1986-2014 Free Software Foundation, Inc.
    Generated from expread.y (now c-exp.y) and contributed by the Department
    of Computer Science at the State University of New York at Buffalo, 1991.
 
@@ -34,12 +33,12 @@
    generator.  Doing this with #defines and trying to control the interaction
    with include files (<malloc.h> and <stdlib.h> for example) just became
    too messy, particularly when such includes can be inserted at random
-   times by the parser generator. */
+   times by the parser generator.  */
    
 %{
 
 #include "defs.h"
-#include "gdb_string.h"
+#include <string.h>
 #include "expression.h"
 #include "language.h"
 #include "value.h"
@@ -50,18 +49,18 @@
 #include "objfiles.h" /* For have_full_symbols and have_partial_symbols */
 #include "block.h"
 
-#define parse_type builtin_type (parse_gdbarch)
-#define parse_m2_type builtin_m2_type (parse_gdbarch)
+#define parse_type(ps) builtin_type (parse_gdbarch (ps))
+#define parse_m2_type(ps) builtin_m2_type (parse_gdbarch (ps))
 
 /* Remap normal yacc parser interface names (yyparse, yylex, yyerror, etc),
    as well as gratuitiously global symbol names, so we can have multiple
    yacc generated parsers in gdb.  Note that these are only the variables
    produced by yacc.  If other parser generators (bison, byacc, etc) produce
    additional global names that conflict at link time, then those parser
-   generators need to be fixed instead of adding those names to this list. */
+   generators need to be fixed instead of adding those names to this list.  */
 
 #define	yymaxdepth m2_maxdepth
-#define	yyparse	m2_parse
+#define	yyparse	m2_parse_internal
 #define	yylex	m2_lex
 #define	yyerror	m2_error
 #define	yylval	m2_lval
@@ -100,6 +99,12 @@
 #define yygindex m2_yygindex
 #define yytable	 m2_yytable
 #define yycheck	 m2_yycheck
+#define yyss	m2_yyss
+#define yysslim	m2_yysslim
+#define yyssp	m2_yyssp
+#define yystacksize m2_yystacksize
+#define yyvs	m2_yyvs
+#define yyvsp	m2_yyvsp
 
 #ifndef YYDEBUG
 #define	YYDEBUG 1		/* Default to yydebug support */
@@ -107,26 +112,21 @@
 
 #define YYFPRINTF parser_fprintf
 
+/* The state of the parser, used internally when we are parsing the
+   expression.  */
+
+static struct parser_state *pstate = NULL;
+
 int yyparse (void);
 
 static int yylex (void);
 
 void yyerror (char *);
 
-#if 0
-static char *make_qualname (char *, char *);
-#endif
-
 static int parse_number (int);
 
-/* The sign of the number being parsed. */
+/* The sign of the number being parsed.  */
 static int number_sign = 1;
-
-/* The block that the module specified by the qualifer on an identifer is
-   contained in, */
-#if 0
-static struct block *modblock=0;
-#endif
 
 %}
 
@@ -209,31 +209,31 @@ start   :	exp
 	;
 
 type_exp:	type
-		{ write_exp_elt_opcode(OP_TYPE);
-		  write_exp_elt_type($1);
-		  write_exp_elt_opcode(OP_TYPE);
+		{ write_exp_elt_opcode (pstate, OP_TYPE);
+		  write_exp_elt_type (pstate, $1);
+		  write_exp_elt_opcode (pstate, OP_TYPE);
 		}
 	;
 
 /* Expressions */
 
 exp     :       exp '^'   %prec UNARY
-                        { write_exp_elt_opcode (UNOP_IND); }
+                        { write_exp_elt_opcode (pstate, UNOP_IND); }
 	;
 
 exp	:	'-'
 			{ number_sign = -1; }
 		exp    %prec UNARY
 			{ number_sign = 1;
-			  write_exp_elt_opcode (UNOP_NEG); }
+			  write_exp_elt_opcode (pstate, UNOP_NEG); }
 	;
 
 exp	:	'+' exp    %prec UNARY
-		{ write_exp_elt_opcode(UNOP_PLUS); }
+		{ write_exp_elt_opcode (pstate, UNOP_PLUS); }
 	;
 
 exp	:	not_exp exp %prec UNARY
-			{ write_exp_elt_opcode (UNOP_LOGICAL_NOT); }
+			{ write_exp_elt_opcode (pstate, UNOP_LOGICAL_NOT); }
 	;
 
 not_exp	:	NOT
@@ -241,109 +241,111 @@ not_exp	:	NOT
 	;
 
 exp	:	CAP '(' exp ')'
-			{ write_exp_elt_opcode (UNOP_CAP); }
+			{ write_exp_elt_opcode (pstate, UNOP_CAP); }
 	;
 
 exp	:	ORD '(' exp ')'
-			{ write_exp_elt_opcode (UNOP_ORD); }
+			{ write_exp_elt_opcode (pstate, UNOP_ORD); }
 	;
 
 exp	:	ABS '(' exp ')'
-			{ write_exp_elt_opcode (UNOP_ABS); }
+			{ write_exp_elt_opcode (pstate, UNOP_ABS); }
 	;
 
 exp	: 	HIGH '(' exp ')'
-			{ write_exp_elt_opcode (UNOP_HIGH); }
+			{ write_exp_elt_opcode (pstate, UNOP_HIGH); }
 	;
 
 exp 	:	MIN_FUNC '(' type ')'
-			{ write_exp_elt_opcode (UNOP_MIN);
-			  write_exp_elt_type ($3);
-			  write_exp_elt_opcode (UNOP_MIN); }
+			{ write_exp_elt_opcode (pstate, UNOP_MIN);
+			  write_exp_elt_type (pstate, $3);
+			  write_exp_elt_opcode (pstate, UNOP_MIN); }
 	;
 
 exp	: 	MAX_FUNC '(' type ')'
-			{ write_exp_elt_opcode (UNOP_MAX);
-			  write_exp_elt_type ($3);
-			  write_exp_elt_opcode (UNOP_MAX); }
+			{ write_exp_elt_opcode (pstate, UNOP_MAX);
+			  write_exp_elt_type (pstate, $3);
+			  write_exp_elt_opcode (pstate, UNOP_MAX); }
 	;
 
 exp	:	FLOAT_FUNC '(' exp ')'
-			{ write_exp_elt_opcode (UNOP_FLOAT); }
+			{ write_exp_elt_opcode (pstate, UNOP_FLOAT); }
 	;
 
 exp	:	VAL '(' type ',' exp ')'
-			{ write_exp_elt_opcode (BINOP_VAL);
-			  write_exp_elt_type ($3);
-			  write_exp_elt_opcode (BINOP_VAL); }
+			{ write_exp_elt_opcode (pstate, BINOP_VAL);
+			  write_exp_elt_type (pstate, $3);
+			  write_exp_elt_opcode (pstate, BINOP_VAL); }
 	;
 
 exp	:	CHR '(' exp ')'
-			{ write_exp_elt_opcode (UNOP_CHR); }
+			{ write_exp_elt_opcode (pstate, UNOP_CHR); }
 	;
 
 exp	:	ODD '(' exp ')'
-			{ write_exp_elt_opcode (UNOP_ODD); }
+			{ write_exp_elt_opcode (pstate, UNOP_ODD); }
 	;
 
 exp	:	TRUNC '(' exp ')'
-			{ write_exp_elt_opcode (UNOP_TRUNC); }
+			{ write_exp_elt_opcode (pstate, UNOP_TRUNC); }
 	;
 
 exp	:	TSIZE '(' exp ')'
-			{ write_exp_elt_opcode (UNOP_SIZEOF); }
+			{ write_exp_elt_opcode (pstate, UNOP_SIZEOF); }
 	;
 
 exp	:	SIZE exp       %prec UNARY
-			{ write_exp_elt_opcode (UNOP_SIZEOF); }
+			{ write_exp_elt_opcode (pstate, UNOP_SIZEOF); }
 	;
 
 
 exp	:	INC '(' exp ')'
-			{ write_exp_elt_opcode(UNOP_PREINCREMENT); }
+			{ write_exp_elt_opcode (pstate, UNOP_PREINCREMENT); }
 	;
 
 exp	:	INC '(' exp ',' exp ')'
-			{ write_exp_elt_opcode(BINOP_ASSIGN_MODIFY);
-			  write_exp_elt_opcode(BINOP_ADD);
-			  write_exp_elt_opcode(BINOP_ASSIGN_MODIFY); }
+			{ write_exp_elt_opcode (pstate, BINOP_ASSIGN_MODIFY);
+			  write_exp_elt_opcode (pstate, BINOP_ADD);
+			  write_exp_elt_opcode (pstate,
+						BINOP_ASSIGN_MODIFY); }
 	;
 
 exp	:	DEC '(' exp ')'
-			{ write_exp_elt_opcode(UNOP_PREDECREMENT);}
+			{ write_exp_elt_opcode (pstate, UNOP_PREDECREMENT);}
 	;
 
 exp	:	DEC '(' exp ',' exp ')'
-			{ write_exp_elt_opcode(BINOP_ASSIGN_MODIFY);
-			  write_exp_elt_opcode(BINOP_SUB);
-			  write_exp_elt_opcode(BINOP_ASSIGN_MODIFY); }
+			{ write_exp_elt_opcode (pstate, BINOP_ASSIGN_MODIFY);
+			  write_exp_elt_opcode (pstate, BINOP_SUB);
+			  write_exp_elt_opcode (pstate,
+						BINOP_ASSIGN_MODIFY); }
 	;
 
 exp	:	exp DOT NAME
-			{ write_exp_elt_opcode (STRUCTOP_STRUCT);
-			  write_exp_string ($3);
-			  write_exp_elt_opcode (STRUCTOP_STRUCT); }
+			{ write_exp_elt_opcode (pstate, STRUCTOP_STRUCT);
+			  write_exp_string (pstate, $3);
+			  write_exp_elt_opcode (pstate, STRUCTOP_STRUCT); }
 	;
 
 exp	:	set
 	;
 
 exp	:	exp IN set
-			{ error("Sets are not implemented.");}
+			{ error (_("Sets are not implemented."));}
 	;
 
 exp	:	INCL '(' exp ',' exp ')'
-			{ error("Sets are not implemented.");}
+			{ error (_("Sets are not implemented."));}
 	;
 
 exp	:	EXCL '(' exp ',' exp ')'
-			{ error("Sets are not implemented.");}
+			{ error (_("Sets are not implemented."));}
 	;
 
 set	:	'{' arglist '}'
-			{ error("Sets are not implemented.");}
+			{ error (_("Sets are not implemented."));}
 	|	type '{' arglist '}'
-			{ error("Sets are not implemented.");}
+			{ error (_("Sets are not implemented."));}
 	;
 
 
@@ -354,13 +356,14 @@ exp     :       exp '['
 			   function types */
                         { start_arglist(); }
                 non_empty_arglist ']'  %prec DOT
-                        { write_exp_elt_opcode (MULTI_SUBSCRIPT);
-			  write_exp_elt_longcst ((LONGEST) end_arglist());
-			  write_exp_elt_opcode (MULTI_SUBSCRIPT); }
+                        { write_exp_elt_opcode (pstate, MULTI_SUBSCRIPT);
+			  write_exp_elt_longcst (pstate,
+						 (LONGEST) end_arglist());
+			  write_exp_elt_opcode (pstate, MULTI_SUBSCRIPT); }
         ;
 
 exp	:	exp '[' exp ']'
-			{ write_exp_elt_opcode (BINOP_SUBSCRIPT); }
+			{ write_exp_elt_opcode (pstate, BINOP_SUBSCRIPT); }
 	;
 
 exp	:	exp '('
@@ -368,9 +371,10 @@ exp	:	exp '('
 			   being accumulated by an outer function call.  */
 			{ start_arglist (); }
 		arglist ')'	%prec DOT
-			{ write_exp_elt_opcode (OP_FUNCALL);
-			  write_exp_elt_longcst ((LONGEST) end_arglist ());
-			  write_exp_elt_opcode (OP_FUNCALL); }
+			{ write_exp_elt_opcode (pstate, OP_FUNCALL);
+			  write_exp_elt_longcst (pstate,
+						 (LONGEST) end_arglist ());
+			  write_exp_elt_opcode (pstate, OP_FUNCALL); }
 	;
 
 arglist	:
@@ -396,15 +400,15 @@ non_empty_arglist
 
 /* GDB construct */
 exp	:	'{' type '}' exp  %prec UNARY
-			{ write_exp_elt_opcode (UNOP_MEMVAL);
-			  write_exp_elt_type ($2);
-			  write_exp_elt_opcode (UNOP_MEMVAL); }
+			{ write_exp_elt_opcode (pstate, UNOP_MEMVAL);
+			  write_exp_elt_type (pstate, $2);
+			  write_exp_elt_opcode (pstate, UNOP_MEMVAL); }
 	;
 
 exp     :       type '(' exp ')' %prec UNARY
-                        { write_exp_elt_opcode (UNOP_CAST);
-			  write_exp_elt_type ($1);
-			  write_exp_elt_opcode (UNOP_CAST); }
+                        { write_exp_elt_opcode (pstate, UNOP_CAST);
+			  write_exp_elt_type (pstate, $1);
+			  write_exp_elt_opcode (pstate, UNOP_CAST); }
 	;
 
 exp	:	'(' exp ')'
@@ -416,141 +420,151 @@ exp	:	'(' exp ')'
 
 /* GDB construct */
 exp	:	exp '@' exp
-			{ write_exp_elt_opcode (BINOP_REPEAT); }
+			{ write_exp_elt_opcode (pstate, BINOP_REPEAT); }
 	;
 
 exp	:	exp '*' exp
-			{ write_exp_elt_opcode (BINOP_MUL); }
+			{ write_exp_elt_opcode (pstate, BINOP_MUL); }
 	;
 
 exp	:	exp '/' exp
-			{ write_exp_elt_opcode (BINOP_DIV); }
+			{ write_exp_elt_opcode (pstate, BINOP_DIV); }
 	;
 
 exp     :       exp DIV exp
-                        { write_exp_elt_opcode (BINOP_INTDIV); }
+                        { write_exp_elt_opcode (pstate, BINOP_INTDIV); }
         ;
 
 exp	:	exp MOD exp
-			{ write_exp_elt_opcode (BINOP_REM); }
+			{ write_exp_elt_opcode (pstate, BINOP_REM); }
 	;
 
 exp	:	exp '+' exp
-			{ write_exp_elt_opcode (BINOP_ADD); }
+			{ write_exp_elt_opcode (pstate, BINOP_ADD); }
 	;
 
 exp	:	exp '-' exp
-			{ write_exp_elt_opcode (BINOP_SUB); }
+			{ write_exp_elt_opcode (pstate, BINOP_SUB); }
 	;
 
 exp	:	exp '=' exp
-			{ write_exp_elt_opcode (BINOP_EQUAL); }
+			{ write_exp_elt_opcode (pstate, BINOP_EQUAL); }
 	;
 
 exp	:	exp NOTEQUAL exp
-			{ write_exp_elt_opcode (BINOP_NOTEQUAL); }
+			{ write_exp_elt_opcode (pstate, BINOP_NOTEQUAL); }
         |       exp '#' exp
-                        { write_exp_elt_opcode (BINOP_NOTEQUAL); }
+                        { write_exp_elt_opcode (pstate, BINOP_NOTEQUAL); }
 	;
 
 exp	:	exp LEQ exp
-			{ write_exp_elt_opcode (BINOP_LEQ); }
+			{ write_exp_elt_opcode (pstate, BINOP_LEQ); }
 	;
 
 exp	:	exp GEQ exp
-			{ write_exp_elt_opcode (BINOP_GEQ); }
+			{ write_exp_elt_opcode (pstate, BINOP_GEQ); }
 	;
 
 exp	:	exp '<' exp
-			{ write_exp_elt_opcode (BINOP_LESS); }
+			{ write_exp_elt_opcode (pstate, BINOP_LESS); }
 	;
 
 exp	:	exp '>' exp
-			{ write_exp_elt_opcode (BINOP_GTR); }
+			{ write_exp_elt_opcode (pstate, BINOP_GTR); }
 	;
 
 exp	:	exp LOGICAL_AND exp
-			{ write_exp_elt_opcode (BINOP_LOGICAL_AND); }
+			{ write_exp_elt_opcode (pstate, BINOP_LOGICAL_AND); }
 	;
 
 exp	:	exp OROR exp
-			{ write_exp_elt_opcode (BINOP_LOGICAL_OR); }
+			{ write_exp_elt_opcode (pstate, BINOP_LOGICAL_OR); }
 	;
 
 exp	:	exp ASSIGN exp
-			{ write_exp_elt_opcode (BINOP_ASSIGN); }
+			{ write_exp_elt_opcode (pstate, BINOP_ASSIGN); }
 	;
 
 
 /* Constants */
 
 exp	:	M2_TRUE
-			{ write_exp_elt_opcode (OP_BOOL);
-			  write_exp_elt_longcst ((LONGEST) $1);
-			  write_exp_elt_opcode (OP_BOOL); }
+			{ write_exp_elt_opcode (pstate, OP_BOOL);
+			  write_exp_elt_longcst (pstate, (LONGEST) $1);
+			  write_exp_elt_opcode (pstate, OP_BOOL); }
 	;
 
 exp	:	M2_FALSE
-			{ write_exp_elt_opcode (OP_BOOL);
-			  write_exp_elt_longcst ((LONGEST) $1);
-			  write_exp_elt_opcode (OP_BOOL); }
+			{ write_exp_elt_opcode (pstate, OP_BOOL);
+			  write_exp_elt_longcst (pstate, (LONGEST) $1);
+			  write_exp_elt_opcode (pstate, OP_BOOL); }
 	;
 
 exp	:	INT
-			{ write_exp_elt_opcode (OP_LONG);
-			  write_exp_elt_type (parse_m2_type->builtin_int);
-			  write_exp_elt_longcst ((LONGEST) $1);
-			  write_exp_elt_opcode (OP_LONG); }
+			{ write_exp_elt_opcode (pstate, OP_LONG);
+			  write_exp_elt_type (pstate,
+					parse_m2_type (pstate)->builtin_int);
+			  write_exp_elt_longcst (pstate, (LONGEST) $1);
+			  write_exp_elt_opcode (pstate, OP_LONG); }
 	;
 
 exp	:	UINT
 			{
-			  write_exp_elt_opcode (OP_LONG);
-			  write_exp_elt_type (parse_m2_type->builtin_card);
-			  write_exp_elt_longcst ((LONGEST) $1);
-			  write_exp_elt_opcode (OP_LONG);
+			  write_exp_elt_opcode (pstate, OP_LONG);
+			  write_exp_elt_type (pstate,
+					      parse_m2_type (pstate)
+					      ->builtin_card);
+			  write_exp_elt_longcst (pstate, (LONGEST) $1);
+			  write_exp_elt_opcode (pstate, OP_LONG);
 			}
 	;
 
 exp	:	CHAR
-			{ write_exp_elt_opcode (OP_LONG);
-			  write_exp_elt_type (parse_m2_type->builtin_char);
-			  write_exp_elt_longcst ((LONGEST) $1);
-			  write_exp_elt_opcode (OP_LONG); }
+			{ write_exp_elt_opcode (pstate, OP_LONG);
+			  write_exp_elt_type (pstate,
+					      parse_m2_type (pstate)
+					      ->builtin_char);
+			  write_exp_elt_longcst (pstate, (LONGEST) $1);
+			  write_exp_elt_opcode (pstate, OP_LONG); }
 	;
 
 
 exp	:	FLOAT
-			{ write_exp_elt_opcode (OP_DOUBLE);
-			  write_exp_elt_type (parse_m2_type->builtin_real);
-			  write_exp_elt_dblcst ($1);
-			  write_exp_elt_opcode (OP_DOUBLE); }
+			{ write_exp_elt_opcode (pstate, OP_DOUBLE);
+			  write_exp_elt_type (pstate,
+					      parse_m2_type (pstate)
+					      ->builtin_real);
+			  write_exp_elt_dblcst (pstate, $1);
+			  write_exp_elt_opcode (pstate, OP_DOUBLE); }
 	;
 
 exp	:	variable
 	;
 
 exp	:	SIZE '(' type ')'	%prec UNARY
-			{ write_exp_elt_opcode (OP_LONG);
-			  write_exp_elt_type (parse_type->builtin_int);
-			  write_exp_elt_longcst ((LONGEST) TYPE_LENGTH ($3));
-			  write_exp_elt_opcode (OP_LONG); }
+			{ write_exp_elt_opcode (pstate, OP_LONG);
+			  write_exp_elt_type (pstate,
+					    parse_type (pstate)->builtin_int);
+			  write_exp_elt_longcst (pstate,
+						 (LONGEST) TYPE_LENGTH ($3));
+			  write_exp_elt_opcode (pstate, OP_LONG); }
 	;
 
 exp	:	STRING
-			{ write_exp_elt_opcode (OP_M2_STRING);
-			  write_exp_string ($1);
-			  write_exp_elt_opcode (OP_M2_STRING); }
+			{ write_exp_elt_opcode (pstate, OP_M2_STRING);
+			  write_exp_string (pstate, $1);
+			  write_exp_elt_opcode (pstate, OP_M2_STRING); }
 	;
 
-/* This will be used for extensions later.  Like adding modules. */
+/* This will be used for extensions later.  Like adding modules.  */
 block	:	fblock	
 			{ $$ = SYMBOL_BLOCK_VALUE($1); }
 	;
 
 fblock	:	BLOCKNAME
 			{ struct symbol *sym
-			    = lookup_symbol (copy_name ($1), expression_context_block,
+			    = lookup_symbol (copy_name ($1),
+					     expression_context_block,
 					     VAR_DOMAIN, 0);
 			  $$ = sym;}
 	;
@@ -562,7 +576,7 @@ fblock	:	block COLONCOLON BLOCKNAME
 			    = lookup_symbol (copy_name ($3), $1,
 					     VAR_DOMAIN, 0);
 			  if (!tem || SYMBOL_CLASS (tem) != LOC_BLOCK)
-			    error ("No function \"%s\" in specified context.",
+			    error (_("No function \"%s\" in specified context."),
 				   copy_name ($3));
 			  $$ = tem;
 			}
@@ -570,10 +584,10 @@ fblock	:	block COLONCOLON BLOCKNAME
 
 /* Useful for assigning to PROCEDURE variables */
 variable:	fblock
-			{ write_exp_elt_opcode(OP_VAR_VALUE);
-			  write_exp_elt_block (NULL);
-			  write_exp_elt_sym ($1);
-			  write_exp_elt_opcode (OP_VAR_VALUE); }
+			{ write_exp_elt_opcode (pstate, OP_VAR_VALUE);
+			  write_exp_elt_block (pstate, NULL);
+			  write_exp_elt_sym (pstate, $1);
+			  write_exp_elt_opcode (pstate, OP_VAR_VALUE); }
 	;
 
 /* GDB internal ($foo) variable */
@@ -586,20 +600,27 @@ variable:	block COLONCOLON NAME
 			  sym = lookup_symbol (copy_name ($3), $1,
 					       VAR_DOMAIN, 0);
 			  if (sym == 0)
-			    error ("No symbol \"%s\" in specified context.",
+			    error (_("No symbol \"%s\" in specified context."),
 				   copy_name ($3));
+			  if (symbol_read_needs_frame (sym))
+			    {
+			      if (innermost_block == 0
+				  || contained_in (block_found,
+						   innermost_block))
+				innermost_block = block_found;
+			    }
 
-			  write_exp_elt_opcode (OP_VAR_VALUE);
+			  write_exp_elt_opcode (pstate, OP_VAR_VALUE);
 			  /* block_found is set by lookup_symbol.  */
-			  write_exp_elt_block (block_found);
-			  write_exp_elt_sym (sym);
-			  write_exp_elt_opcode (OP_VAR_VALUE); }
+			  write_exp_elt_block (pstate, block_found);
+			  write_exp_elt_sym (pstate, sym);
+			  write_exp_elt_opcode (pstate, OP_VAR_VALUE); }
 	;
 
-/* Base case for variables. */
+/* Base case for variables.  */
 variable:	NAME
 			{ struct symbol *sym;
-			  int is_a_field_of_this;
+			  struct field_of_this_result is_a_field_of_this;
 
  			  sym = lookup_symbol (copy_name ($1),
 					       expression_context_block,
@@ -615,27 +636,27 @@ variable:	NAME
 				    innermost_block = block_found;
 				}
 
-			      write_exp_elt_opcode (OP_VAR_VALUE);
+			      write_exp_elt_opcode (pstate, OP_VAR_VALUE);
 			      /* We want to use the selected frame, not
 				 another more inner frame which happens to
 				 be in the same block.  */
-			      write_exp_elt_block (NULL);
-			      write_exp_elt_sym (sym);
-			      write_exp_elt_opcode (OP_VAR_VALUE);
+			      write_exp_elt_block (pstate, NULL);
+			      write_exp_elt_sym (pstate, sym);
+			      write_exp_elt_opcode (pstate, OP_VAR_VALUE);
 			    }
 			  else
 			    {
-			      struct minimal_symbol *msymbol;
+			      struct bound_minimal_symbol msymbol;
 			      char *arg = copy_name ($1);
 
 			      msymbol =
-				lookup_minimal_symbol (arg, NULL, NULL);
-			      if (msymbol != NULL)
-				write_exp_msymbol (msymbol);
+				lookup_bound_minimal_symbol (arg);
+			      if (msymbol.minsym != NULL)
+				write_exp_msymbol (pstate, msymbol);
 			      else if (!have_full_symbols () && !have_partial_symbols ())
-				error ("No symbol table is loaded.  Use the \"symbol-file\" command.");
+				error (_("No symbol table is loaded.  Use the \"symbol-file\" command."));
 			      else
-				error ("No symbol \"%s\" in current context.",
+				error (_("No symbol \"%s\" in current context."),
 				       copy_name ($1));
 			    }
 			}
@@ -643,7 +664,8 @@ variable:	NAME
 
 type
 	:	TYPENAME
-			{ $$ = lookup_typename (parse_language, parse_gdbarch,
+			{ $$ = lookup_typename (parse_language (pstate),
+						parse_gdbarch (pstate),
 						copy_name ($1),
 						expression_context_block, 0); }
 
@@ -658,10 +680,9 @@ type
 /*** Needs some error checking for the float case ***/
 
 static int
-parse_number (olen)
-     int olen;
+parse_number (int olen)
 {
-  char *p = lexptr;
+  const char *p = lexptr;
   LONGEST n = 0;
   LONGEST prevn = 0;
   int c,i,ischar=0;
@@ -692,9 +713,9 @@ parse_number (olen)
 	return FLOAT;
       }
     if (p[c] == '.' && base != 10)
-       error("Floating point numbers must be base 10.");
+       error (_("Floating point numbers must be base 10."));
     if (base == 10 && (p[c] < '0' || p[c] > '9'))
-       error("Invalid digit \'%c\' in number.",p[c]);
+       error (_("Invalid digit \'%c\' in number."),p[c]);
  }
 
   while (len-- > 0)
@@ -702,7 +723,7 @@ parse_number (olen)
       c = *p++;
       n *= base;
       if( base == 8 && (c == '8' || c == '9'))
-	 error("Invalid digit \'%c\' in octal number.",c);
+	 error (_("Invalid digit \'%c\' in octal number."),c);
       if (c >= '0' && c <= '9')
 	i = c - '0';
       else
@@ -718,12 +739,12 @@ parse_number (olen)
       if(!unsigned_p && number_sign == 1 && (prevn >= n))
 	 unsigned_p=1;		/* Try something unsigned */
       /* Don't do the range check if n==i and i==0, since that special
-	 case will give an overflow error. */
+	 case will give an overflow error.  */
       if(RANGE_CHECK && n!=i && i)
       {
 	 if((unsigned_p && (unsigned)prevn >= (unsigned)n) ||
 	    ((!unsigned_p && number_sign==-1) && -prevn <= -n))
-	    range_error("Overflow on numeric constant.");
+	    range_error (_("Overflow on numeric constant."));
       }
 	 prevn=n;
     }
@@ -743,7 +764,7 @@ parse_number (olen)
      return UINT;
   }
   else if((unsigned_p && (n<0))) {
-     range_error("Overflow on numeric constant -- number too large.");
+     range_error (_("Overflow on numeric constant -- number too large."));
      /* But, this can return if range_check == range_warn.  */
   }
   yylval.lval = n;
@@ -804,16 +825,16 @@ static struct keyword keytab[] =
 
 /* Read one token, getting characters through lexptr.  */
 
-/* This is where we will check to make sure that the language and the operators used are
-   compatible  */
+/* This is where we will check to make sure that the language and the
+   operators used are compatible  */
 
 static int
-yylex ()
+yylex (void)
 {
   int c;
   int namelen;
   int i;
-  char *tokstart;
+  const char *tokstart;
   char quote;
 
  retry:
@@ -905,7 +926,7 @@ yylex ()
 	      }
 	  }
       if(c != quote)
-	 error("Unterminated string or character constant.");
+	 error (_("Unterminated string or character constant."));
       yylval.sval.ptr = tokstart + 1;
       yylval.sval.length = namelen - 1;
       lexptr += namelen + 1;
@@ -926,7 +947,7 @@ yylex ()
     {
       /* It's a number.  */
       int got_dot = 0, got_e = 0;
-      char *p = tokstart;
+      const char *p = tokstart;
       int toktype;
 
       for (++p ;; ++p)
@@ -952,7 +973,7 @@ yylex ()
 
 	    memcpy (err_copy, tokstart, p - tokstart);
 	    err_copy[p - tokstart] = 0;
-	    error ("Invalid number \"%s\".", err_copy);
+	    error (_("Invalid number \"%s\"."), err_copy);
 	  }
 	lexptr = p;
 	return toktype;
@@ -961,7 +982,7 @@ yylex ()
   if (!(c == '_' || c == '$'
 	|| (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')))
     /* We must have come across a bad character (e.g. ';').  */
-    error ("Invalid character '%c' in expression.", c);
+    error (_("Invalid character '%c' in expression."), c);
 
   /* It's a name.  See how long it is.  */
   namelen = 0;
@@ -991,7 +1012,7 @@ yylex ()
 
   if (*tokstart == '$')
     {
-      write_dollar_variable (yylval.sval);
+      write_dollar_variable (pstate, yylval.sval);
       return INTERNAL_VAR;
     }
 
@@ -1011,8 +1032,9 @@ yylex ()
     sym = lookup_symbol (tmp, expression_context_block, VAR_DOMAIN, 0);
     if (sym && SYMBOL_CLASS (sym) == LOC_BLOCK)
       return BLOCKNAME;
-    if (lookup_typename (parse_language, parse_gdbarch,
-			 copy_name (yylval.sval), expression_context_block, 1))
+    if (lookup_typename (parse_language (pstate), parse_gdbarch (pstate),
+			 copy_name (yylval.sval),
+			 expression_context_block, 1))
       return TYPENAME;
 
     if(sym)
@@ -1038,20 +1060,20 @@ yylex ()
 	  return BLOCKNAME;
 
        case LOC_UNDEF:
-	  error("internal:  Undefined class in m2lex()");
+	  error (_("internal:  Undefined class in m2lex()"));
 
        case LOC_LABEL:
        case LOC_UNRESOLVED:
-	  error("internal:  Unforseen case in m2lex()");
+	  error (_("internal:  Unforseen case in m2lex()"));
 
        default:
-	  error ("unhandled token in m2lex()");
+	  error (_("unhandled token in m2lex()"));
 	  break;
        }
     }
     else
     {
-       /* Built-in BOOLEAN type.  This is sort of a hack. */
+       /* Built-in BOOLEAN type.  This is sort of a hack.  */
        if (strncmp (tokstart, "TRUE", 4) == 0)
        {
 	  yylval.ulval = 1;
@@ -1064,31 +1086,32 @@ yylex ()
        }
     }
 
-    /* Must be another type of name... */
+    /* Must be another type of name...  */
     return NAME;
  }
 }
 
-#if 0		/* Unused */
-static char *
-make_qualname(mod,ident)
-   char *mod, *ident;
+int
+m2_parse (struct parser_state *par_state)
 {
-   char *new = malloc(strlen(mod)+strlen(ident)+2);
+  int result;
+  struct cleanup *c = make_cleanup_clear_parser_state (&pstate);
 
-   strcpy(new,mod);
-   strcat(new,".");
-   strcat(new,ident);
-   return new;
+  /* Setting up the parser state.  */
+  gdb_assert (par_state != NULL);
+  pstate = par_state;
+
+  result = yyparse ();
+  do_cleanups (c);
+
+  return result;
 }
-#endif  /* 0 */
 
 void
-yyerror (msg)
-     char *msg;
+yyerror (char *msg)
 {
   if (prev_lexptr)
     lexptr = prev_lexptr;
 
-  error ("A %s in expression, near `%s'.", (msg ? msg : "error"), lexptr);
+  error (_("A %s in expression, near `%s'."), (msg ? msg : "error"), lexptr);
 }

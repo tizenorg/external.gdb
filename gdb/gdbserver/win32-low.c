@@ -1,5 +1,5 @@
 /* Low level interface to Windows debugging, for gdbserver.
-   Copyright (C) 2006, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2006-2014 Free Software Foundation, Inc.
 
    Contributed by Leo Zayas.  Based on "win32-nat.c" from GDB.
 
@@ -24,14 +24,16 @@
 #include "gdb/fileio.h"
 #include "mem-break.h"
 #include "win32-low.h"
+#include "gdbthread.h"
+#include "dll.h"
+#include "hostio.h"
 
+#include <stdint.h>
 #include <windows.h>
 #include <winnt.h>
 #include <imagehlp.h>
 #include <tlhelp32.h>
 #include <psapi.h>
-#include <sys/param.h>
-#include <malloc.h>
 #include <process.h>
 
 #ifndef USE_WIN32API
@@ -73,10 +75,15 @@ static int attaching = 0;
 static HANDLE current_process_handle = NULL;
 static DWORD current_process_id = 0;
 static DWORD main_thread_id = 0;
-static enum target_signal last_sig = TARGET_SIGNAL_0;
+static enum gdb_signal last_sig = GDB_SIGNAL_0;
 
 /* The current debug event from WaitForDebugEvent.  */
 static DEBUG_EVENT current_event;
+
+/* A status that hasn't been reported to the core yet, and so
+   win32_wait should return it next, instead of fetching the next
+   debug event off the win32 API.  */
+static struct target_waitstatus cached_status;
 
 /* Non zero if an interrupt request is to be satisfied by suspending
    all threads.  */
@@ -86,21 +93,28 @@ static int soft_interrupt_requested = 0;
    by suspending all the threads.  */
 static int faked_breakpoint = 0;
 
+const struct target_desc *win32_tdesc;
+
 #define NUM_REGS (the_low_target.num_regs)
 
-typedef BOOL WINAPI (*winapi_DebugActiveProcessStop) (DWORD dwProcessId);
-typedef BOOL WINAPI (*winapi_DebugSetProcessKillOnExit) (BOOL KillOnExit);
-typedef BOOL WINAPI (*winapi_DebugBreakProcess) (HANDLE);
-typedef BOOL WINAPI (*winapi_GenerateConsoleCtrlEvent) (DWORD, DWORD);
+typedef BOOL (WINAPI *winapi_DebugActiveProcessStop) (DWORD dwProcessId);
+typedef BOOL (WINAPI *winapi_DebugSetProcessKillOnExit) (BOOL KillOnExit);
+typedef BOOL (WINAPI *winapi_DebugBreakProcess) (HANDLE);
+typedef BOOL (WINAPI *winapi_GenerateConsoleCtrlEvent) (DWORD, DWORD);
 
+static ptid_t win32_wait (ptid_t ptid, struct target_waitstatus *ourstatus,
+			  int options);
 static void win32_resume (struct thread_resume *resume_info, size_t n);
+#ifndef _WIN32_WCE
+static void win32_add_all_dlls (void);
+#endif
 
 /* Get the thread ID from the current selected inferior (the current
    thread).  */
 static ptid_t
 current_inferior_ptid (void)
 {
-  return ((struct inferior_list_entry*) current_inferior)->id;
+  return current_ptid;
 }
 
 /* The current debug event from WaitForDebugEvent.  */
@@ -192,9 +206,6 @@ child_add_thread (DWORD pid, DWORD tid, HANDLE h, void *tlb)
   th->thread_local_base = (CORE_ADDR) (uintptr_t) tlb;
 
   add_thread (ptid, th);
-  set_inferior_regcache_data ((struct thread_info *)
-			      find_inferior_id (&all_threads, ptid),
-			      new_register_cache ());
 
   if (the_low_target.thread_added != NULL)
     (*the_low_target.thread_added) (th);
@@ -221,7 +232,7 @@ child_delete_thread (DWORD pid, DWORD tid)
   ptid_t ptid;
 
   /* If the last thread is exiting, just return.  */
-  if (all_threads.head == all_threads.tail)
+  if (one_inferior_p (&all_threads))
     return;
 
   ptid = ptid_build (pid, tid, 0);
@@ -236,20 +247,29 @@ child_delete_thread (DWORD pid, DWORD tid)
    if the low target has registered a corresponding function.  */
 
 static int
-win32_insert_point (char type, CORE_ADDR addr, int len)
+win32_supports_z_point_type (char z_type)
+{
+  return (the_low_target.supports_z_point_type != NULL
+	  && the_low_target.supports_z_point_type (z_type));
+}
+
+static int
+win32_insert_point (enum raw_bkpt_type type, CORE_ADDR addr,
+		    int size, struct raw_breakpoint *bp)
 {
   if (the_low_target.insert_point != NULL)
-    return the_low_target.insert_point (type, addr, len);
+    return the_low_target.insert_point (type, addr, size, bp);
   else
     /* Unsupported (see target.h).  */
     return 1;
 }
 
 static int
-win32_remove_point (char type, CORE_ADDR addr, int len)
+win32_remove_point (enum raw_bkpt_type type, CORE_ADDR addr,
+		    int size, struct raw_breakpoint *bp)
 {
   if (the_low_target.remove_point != NULL)
-    return the_low_target.remove_point (type, addr, len);
+    return the_low_target.remove_point (type, addr, size, bp);
   else
     /* Unsupported (see target.h).  */
     return 1;
@@ -279,21 +299,30 @@ static int
 child_xfer_memory (CORE_ADDR memaddr, char *our, int len,
 		   int write, struct target_ops *target)
 {
-  SIZE_T done;
+  BOOL success;
+  SIZE_T done = 0;
+  DWORD lasterror = 0;
   uintptr_t addr = (uintptr_t) memaddr;
 
   if (write)
     {
-      WriteProcessMemory (current_process_handle, (LPVOID) addr,
-			  (LPCVOID) our, len, &done);
+      success = WriteProcessMemory (current_process_handle, (LPVOID) addr,
+				    (LPCVOID) our, len, &done);
+      if (!success)
+	lasterror = GetLastError ();
       FlushInstructionCache (current_process_handle, (LPCVOID) addr, len);
     }
   else
     {
-      ReadProcessMemory (current_process_handle, (LPCVOID) addr, (LPVOID) our,
-			 len, &done);
+      success = ReadProcessMemory (current_process_handle, (LPCVOID) addr,
+				   (LPVOID) our, len, &done);
+      if (!success)
+	lasterror = GetLastError ();
     }
-  return done;
+  if (!success && lasterror == ERROR_PARTIAL_COPY && done > 0)
+    return done;
+  else
+    return success ? done : -1;
 }
 
 /* Clear out any old thread list and reinitialize it to a pristine
@@ -304,10 +333,16 @@ child_init_thread_list (void)
   for_each_inferior (&all_threads, delete_thread_info);
 }
 
+/* Zero during the child initialization phase, and nonzero otherwise.  */
+
+static int child_initialization_done = 0;
+
 static void
 do_initial_child_stuff (HANDLE proch, DWORD pid, int attached)
 {
-  last_sig = TARGET_SIGNAL_0;
+  struct process_info *proc;
+
+  last_sig = GDB_SIGNAL_0;
 
   current_process_handle = proch;
   current_process_id = pid;
@@ -318,11 +353,62 @@ do_initial_child_stuff (HANDLE proch, DWORD pid, int attached)
 
   memset (&current_event, 0, sizeof (current_event));
 
-  add_process (pid, attached);
+  proc = add_process (pid, attached);
+  proc->tdesc = win32_tdesc;
   child_init_thread_list ();
+  child_initialization_done = 0;
 
   if (the_low_target.initial_stuff != NULL)
     (*the_low_target.initial_stuff) ();
+
+  cached_status.kind = TARGET_WAITKIND_IGNORE;
+
+  /* Flush all currently pending debug events (thread and dll list) up
+     to the initial breakpoint.  */
+  while (1)
+    {
+      struct target_waitstatus status;
+
+      win32_wait (minus_one_ptid, &status, 0);
+
+      /* Note win32_wait doesn't return thread events.  */
+      if (status.kind != TARGET_WAITKIND_LOADED)
+	{
+	  cached_status = status;
+	  break;
+	}
+
+      {
+	struct thread_resume resume;
+
+	resume.thread = minus_one_ptid;
+	resume.kind = resume_continue;
+	resume.sig = 0;
+
+	win32_resume (&resume, 1);
+      }
+    }
+
+#ifndef _WIN32_WCE
+  /* Now that the inferior has been started and all DLLs have been mapped,
+     we can iterate over all DLLs and load them in.
+
+     We avoid doing it any earlier because, on certain versions of Windows,
+     LOAD_DLL_DEBUG_EVENTs are sometimes not complete.  In particular,
+     we have seen on Windows 8.1 that the ntdll.dll load event does not
+     include the DLL name, preventing us from creating an associated SO.
+     A possible explanation is that ntdll.dll might be mapped before
+     the SO info gets created by the Windows system -- ntdll.dll is
+     the first DLL to be reported via LOAD_DLL_DEBUG_EVENT and other DLLs
+     do not seem to suffer from that problem.
+
+     Rather than try to work around this sort of issue, it is much
+     simpler to just ignore DLL load/unload events during the startup
+     phase, and then process them all in one batch now.  */
+  win32_add_all_dlls ();
+#endif
+
+  child_initialization_done = 1;
 }
 
 /* Resume all artificially suspended threads if we are continuing
@@ -447,7 +533,7 @@ strwinerror (DWORD error)
       LocalFree (msgbuf);
     }
   else
-    sprintf (buf, "unknown win32 error (%ld)", error);
+    sprintf (buf, "unknown win32 error (%u)", (unsigned) error);
 
   SetLastError (lasterr);
   return buf;
@@ -512,7 +598,7 @@ static int
 win32_create_inferior (char *program, char **program_args)
 {
 #ifndef USE_WIN32API
-  char real_path[MAXPATHLEN];
+  char real_path[PATH_MAX];
   char *orig_path, *new_path, *path_ptr;
 #endif
   BOOL ret;
@@ -536,13 +622,14 @@ win32_create_inferior (char *program, char **program_args)
   path_ptr = getenv ("PATH");
   if (path_ptr)
     {
+      int size = cygwin_conv_path_list (CCP_POSIX_TO_WIN_A, path_ptr, NULL, 0);
       orig_path = alloca (strlen (path_ptr) + 1);
-      new_path = alloca (cygwin_posix_to_win32_path_list_buf_size (path_ptr));
+      new_path = alloca (size);
       strcpy (orig_path, path_ptr);
-      cygwin_posix_to_win32_path_list (path_ptr, new_path);
+      cygwin_conv_path_list (CCP_POSIX_TO_WIN_A, path_ptr, new_path, size);
       setenv ("PATH", new_path, 1);
-    }
-  cygwin_conv_to_win32_path (program, real_path);
+     }
+  cygwin_conv_path (CCP_POSIX_TO_WIN_A, program, real_path, PATH_MAX);
   program = real_path;
 #endif
 
@@ -803,7 +890,7 @@ static void
 win32_resume (struct thread_resume *resume_info, size_t n)
 {
   DWORD tid;
-  enum target_signal sig;
+  enum gdb_signal sig;
   int step;
   win32_thread_info *th;
   DWORD continue_status = DBG_CONTINUE;
@@ -832,7 +919,7 @@ win32_resume (struct thread_resume *resume_info, size_t n)
       step = 0;
     }
 
-  if (sig != TARGET_SIGNAL_0)
+  if (sig != GDB_SIGNAL_0)
     {
       if (current_event.dwDebugEventCode != EXCEPTION_DEBUG_EVENT)
 	{
@@ -844,7 +931,7 @@ win32_resume (struct thread_resume *resume_info, size_t n)
 	OUTMSG (("Can only continue with recieved signal %d.\n", last_sig));
     }
 
-  last_sig = TARGET_SIGNAL_0;
+  last_sig = GDB_SIGNAL_0;
 
   /* Get context for the currently selected thread.  */
   ptid = debug_event_ptid (&current_event);
@@ -893,6 +980,11 @@ win32_add_one_solib (const char *name, CORE_ADDR load_addr)
   HANDLE h = FindFirstFileA (name, &w32_fd);
 #endif
 
+  /* The symbols in a dll are offset by 0x1000, which is the
+     offset from 0 of the first byte in an image - because
+     of the file header and the section alignment. */
+  load_addr += 0x1000;
+
   if (h == INVALID_HANDLE_VALUE)
     strcpy (buf, name);
   else
@@ -925,7 +1017,7 @@ win32_add_one_solib (const char *name, CORE_ADDR load_addr)
 #endif
 
 #ifdef __CYGWIN__
-  cygwin_conv_to_posix_path (buf, buf2);
+  cygwin_conv_path (CCP_WIN_A_TO_POSIX, buf, buf2, sizeof (buf2));
 #else
   strcpy (buf2, buf);
 #endif
@@ -1018,11 +1110,14 @@ load_psapi (void)
 	  && win32_GetModuleFileNameExA != NULL);
 }
 
-static int
-psapi_get_dll_name (LPVOID BaseAddress, char *dll_name_ret)
+#ifndef _WIN32_WCE
+
+/* Iterate over all DLLs currently mapped by our inferior, and
+   add them to our list of solibs.  */
+
+static void
+win32_add_all_dlls (void)
 {
-  DWORD len;
-  MODULEINFO mi;
   size_t i;
   HMODULE dh_buf[1];
   HMODULE *DllHandle = dh_buf;
@@ -1030,7 +1125,7 @@ psapi_get_dll_name (LPVOID BaseAddress, char *dll_name_ret)
   BOOL ok;
 
   if (!load_psapi ())
-    goto failed;
+    return;
 
   cbNeeded = 0;
   ok = (*win32_EnumProcessModules) (current_process_handle,
@@ -1039,181 +1134,80 @@ psapi_get_dll_name (LPVOID BaseAddress, char *dll_name_ret)
 				    &cbNeeded);
 
   if (!ok || !cbNeeded)
-    goto failed;
+    return;
 
   DllHandle = (HMODULE *) alloca (cbNeeded);
   if (!DllHandle)
-    goto failed;
+    return;
 
   ok = (*win32_EnumProcessModules) (current_process_handle,
 				    DllHandle,
 				    cbNeeded,
 				    &cbNeeded);
   if (!ok)
-    goto failed;
+    return;
 
-  for (i = 0; i < ((size_t) cbNeeded / sizeof (HMODULE)); i++)
+  for (i = 1; i < ((size_t) cbNeeded / sizeof (HMODULE)); i++)
     {
+      MODULEINFO mi;
+      char dll_name[MAX_PATH];
+
       if (!(*win32_GetModuleInformation) (current_process_handle,
 					  DllHandle[i],
 					  &mi,
 					  sizeof (mi)))
-	{
-	  DWORD err = GetLastError ();
-	  error ("Can't get module info: (error %d): %s\n",
-		 (int) err, strwinerror (err));
-	}
-
-      if (mi.lpBaseOfDll == BaseAddress)
-	{
-	  len = (*win32_GetModuleFileNameExA) (current_process_handle,
-					       DllHandle[i],
-					       dll_name_ret,
-					       MAX_PATH);
-	  if (len == 0)
-	    {
-	      DWORD err = GetLastError ();
-	      error ("Error getting dll name: (error %d): %s\n",
-		     (int) err, strwinerror (err));
-	    }
-	  return 1;
-	}
+	continue;
+      if ((*win32_GetModuleFileNameExA) (current_process_handle,
+					 DllHandle[i],
+					 dll_name,
+					 MAX_PATH) == 0)
+	continue;
+      win32_add_one_solib (dll_name, (CORE_ADDR) (uintptr_t) mi.lpBaseOfDll);
     }
-
-failed:
-  dll_name_ret[0] = '\0';
-  return 0;
 }
+#endif
 
 typedef HANDLE (WINAPI *winapi_CreateToolhelp32Snapshot) (DWORD, DWORD);
 typedef BOOL (WINAPI *winapi_Module32First) (HANDLE, LPMODULEENTRY32);
 typedef BOOL (WINAPI *winapi_Module32Next) (HANDLE, LPMODULEENTRY32);
 
-static winapi_CreateToolhelp32Snapshot win32_CreateToolhelp32Snapshot;
-static winapi_Module32First win32_Module32First;
-static winapi_Module32Next win32_Module32Next;
-#ifdef _WIN32_WCE
-typedef BOOL (WINAPI *winapi_CloseToolhelp32Snapshot) (HANDLE);
-static winapi_CloseToolhelp32Snapshot win32_CloseToolhelp32Snapshot;
-#endif
+/* Handle a DLL load event.
 
-static BOOL
-load_toolhelp (void)
-{
-  static int toolhelp_loaded = 0;
-  static HMODULE dll = NULL;
-
-  if (!toolhelp_loaded)
-    {
-      toolhelp_loaded = 1;
-#ifndef _WIN32_WCE
-      dll = GetModuleHandle (_T("KERNEL32.DLL"));
-#else
-      dll = LoadLibrary (L"TOOLHELP.DLL");
-#endif
-      if (!dll)
-	return FALSE;
-
-      win32_CreateToolhelp32Snapshot =
-	GETPROCADDRESS (dll, CreateToolhelp32Snapshot);
-      win32_Module32First = GETPROCADDRESS (dll, Module32First);
-      win32_Module32Next = GETPROCADDRESS (dll, Module32Next);
-#ifdef _WIN32_WCE
-      win32_CloseToolhelp32Snapshot =
-	GETPROCADDRESS (dll, CloseToolhelp32Snapshot);
-#endif
-    }
-
-  return (win32_CreateToolhelp32Snapshot != NULL
-	  && win32_Module32First != NULL
-	  && win32_Module32Next != NULL
-#ifdef _WIN32_WCE
-	  && win32_CloseToolhelp32Snapshot != NULL
-#endif
-	  );
-}
-
-static int
-toolhelp_get_dll_name (LPVOID BaseAddress, char *dll_name_ret)
-{
-  HANDLE snapshot_module;
-  MODULEENTRY32 modEntry = { sizeof (MODULEENTRY32) };
-  int found = 0;
-
-  if (!load_toolhelp ())
-    return 0;
-
-  snapshot_module = win32_CreateToolhelp32Snapshot (TH32CS_SNAPMODULE,
-						    current_event.dwProcessId);
-  if (snapshot_module == INVALID_HANDLE_VALUE)
-    return 0;
-
-  /* Ignore the first module, which is the exe.  */
-  if (win32_Module32First (snapshot_module, &modEntry))
-    while (win32_Module32Next (snapshot_module, &modEntry))
-      if (modEntry.modBaseAddr == BaseAddress)
-	{
-#ifdef UNICODE
-	  wcstombs (dll_name_ret, modEntry.szExePath, MAX_PATH + 1);
-#else
-	  strcpy (dll_name_ret, modEntry.szExePath);
-#endif
-	  found = 1;
-	  break;
-	}
-
-#ifdef _WIN32_WCE
-  win32_CloseToolhelp32Snapshot (snapshot_module);
-#else
-  CloseHandle (snapshot_module);
-#endif
-  return found;
-}
+   This function assumes that this event did not occur during inferior
+   initialization, where their event info may be incomplete (see
+   do_initial_child_stuff and win32_add_all_dlls for more info on
+   how we handle DLL loading during that phase).  */
 
 static void
 handle_load_dll (void)
 {
   LOAD_DLL_DEBUG_INFO *event = &current_event.u.LoadDll;
-  char dll_buf[MAX_PATH + 1];
-  char *dll_name = NULL;
-  CORE_ADDR load_addr;
+  char *dll_name;
 
-  dll_buf[0] = dll_buf[sizeof (dll_buf) - 1] = '\0';
-
-  /* Windows does not report the image name of the dlls in the debug
-     event on attaches.  We resort to iterating over the list of
-     loaded dlls looking for a match by image base.  */
-  if (!psapi_get_dll_name (event->lpBaseOfDll, dll_buf))
-    {
-      if (!server_waiting)
-	/* On some versions of Windows and Windows CE, we can't create
-	   toolhelp snapshots while the inferior is stopped in a
-	   LOAD_DLL_DEBUG_EVENT due to a dll load, but we can while
-	   Windows is reporting the already loaded dlls.  */
-	toolhelp_get_dll_name (event->lpBaseOfDll, dll_buf);
-    }
-
-  dll_name = dll_buf;
-
-  if (*dll_name == '\0')
-    dll_name = get_image_name (current_process_handle,
-			       event->lpImageName, event->fUnicode);
+  dll_name = get_image_name (current_process_handle,
+			     event->lpImageName, event->fUnicode);
   if (!dll_name)
     return;
 
-  /* The symbols in a dll are offset by 0x1000, which is the
-     the offset from 0 of the first byte in an image - because
-     of the file header and the section alignment. */
-
-  load_addr = (CORE_ADDR) (uintptr_t) event->lpBaseOfDll + 0x1000;
-  win32_add_one_solib (dll_name, load_addr);
+  win32_add_one_solib (dll_name, (CORE_ADDR) (uintptr_t) event->lpBaseOfDll);
 }
+
+/* Handle a DLL unload event.
+
+   This function assumes that this event did not occur during inferior
+   initialization, where their event info may be incomplete (see
+   do_initial_child_stuff and win32_add_one_solib for more info
+   on how we handle DLL loading during that phase).  */
 
 static void
 handle_unload_dll (void)
 {
   CORE_ADDR load_addr =
 	  (CORE_ADDR) (uintptr_t) current_event.u.UnloadDll.lpBaseOfDll;
+
+  /* The symbols in a dll are offset by 0x1000, which is the
+     offset from 0 of the first byte in an image - because
+     of the file header and the section alignment. */
   load_addr += 0x1000;
   unloaded_dll (NULL, load_addr);
 }
@@ -1229,55 +1223,55 @@ handle_exception (struct target_waitstatus *ourstatus)
     {
     case EXCEPTION_ACCESS_VIOLATION:
       OUTMSG2 (("EXCEPTION_ACCESS_VIOLATION"));
-      ourstatus->value.sig = TARGET_SIGNAL_SEGV;
+      ourstatus->value.sig = GDB_SIGNAL_SEGV;
       break;
     case STATUS_STACK_OVERFLOW:
       OUTMSG2 (("STATUS_STACK_OVERFLOW"));
-      ourstatus->value.sig = TARGET_SIGNAL_SEGV;
+      ourstatus->value.sig = GDB_SIGNAL_SEGV;
       break;
     case STATUS_FLOAT_DENORMAL_OPERAND:
       OUTMSG2 (("STATUS_FLOAT_DENORMAL_OPERAND"));
-      ourstatus->value.sig = TARGET_SIGNAL_FPE;
+      ourstatus->value.sig = GDB_SIGNAL_FPE;
       break;
     case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
       OUTMSG2 (("EXCEPTION_ARRAY_BOUNDS_EXCEEDED"));
-      ourstatus->value.sig = TARGET_SIGNAL_FPE;
+      ourstatus->value.sig = GDB_SIGNAL_FPE;
       break;
     case STATUS_FLOAT_INEXACT_RESULT:
       OUTMSG2 (("STATUS_FLOAT_INEXACT_RESULT"));
-      ourstatus->value.sig = TARGET_SIGNAL_FPE;
+      ourstatus->value.sig = GDB_SIGNAL_FPE;
       break;
     case STATUS_FLOAT_INVALID_OPERATION:
       OUTMSG2 (("STATUS_FLOAT_INVALID_OPERATION"));
-      ourstatus->value.sig = TARGET_SIGNAL_FPE;
+      ourstatus->value.sig = GDB_SIGNAL_FPE;
       break;
     case STATUS_FLOAT_OVERFLOW:
       OUTMSG2 (("STATUS_FLOAT_OVERFLOW"));
-      ourstatus->value.sig = TARGET_SIGNAL_FPE;
+      ourstatus->value.sig = GDB_SIGNAL_FPE;
       break;
     case STATUS_FLOAT_STACK_CHECK:
       OUTMSG2 (("STATUS_FLOAT_STACK_CHECK"));
-      ourstatus->value.sig = TARGET_SIGNAL_FPE;
+      ourstatus->value.sig = GDB_SIGNAL_FPE;
       break;
     case STATUS_FLOAT_UNDERFLOW:
       OUTMSG2 (("STATUS_FLOAT_UNDERFLOW"));
-      ourstatus->value.sig = TARGET_SIGNAL_FPE;
+      ourstatus->value.sig = GDB_SIGNAL_FPE;
       break;
     case STATUS_FLOAT_DIVIDE_BY_ZERO:
       OUTMSG2 (("STATUS_FLOAT_DIVIDE_BY_ZERO"));
-      ourstatus->value.sig = TARGET_SIGNAL_FPE;
+      ourstatus->value.sig = GDB_SIGNAL_FPE;
       break;
     case STATUS_INTEGER_DIVIDE_BY_ZERO:
       OUTMSG2 (("STATUS_INTEGER_DIVIDE_BY_ZERO"));
-      ourstatus->value.sig = TARGET_SIGNAL_FPE;
+      ourstatus->value.sig = GDB_SIGNAL_FPE;
       break;
     case STATUS_INTEGER_OVERFLOW:
       OUTMSG2 (("STATUS_INTEGER_OVERFLOW"));
-      ourstatus->value.sig = TARGET_SIGNAL_FPE;
+      ourstatus->value.sig = GDB_SIGNAL_FPE;
       break;
     case EXCEPTION_BREAKPOINT:
       OUTMSG2 (("EXCEPTION_BREAKPOINT"));
-      ourstatus->value.sig = TARGET_SIGNAL_TRAP;
+      ourstatus->value.sig = GDB_SIGNAL_TRAP;
 #ifdef _WIN32_WCE
       /* Remove the initial breakpoint.  */
       check_breakpoints ((CORE_ADDR) (long) current_event
@@ -1286,27 +1280,27 @@ handle_exception (struct target_waitstatus *ourstatus)
       break;
     case DBG_CONTROL_C:
       OUTMSG2 (("DBG_CONTROL_C"));
-      ourstatus->value.sig = TARGET_SIGNAL_INT;
+      ourstatus->value.sig = GDB_SIGNAL_INT;
       break;
     case DBG_CONTROL_BREAK:
       OUTMSG2 (("DBG_CONTROL_BREAK"));
-      ourstatus->value.sig = TARGET_SIGNAL_INT;
+      ourstatus->value.sig = GDB_SIGNAL_INT;
       break;
     case EXCEPTION_SINGLE_STEP:
       OUTMSG2 (("EXCEPTION_SINGLE_STEP"));
-      ourstatus->value.sig = TARGET_SIGNAL_TRAP;
+      ourstatus->value.sig = GDB_SIGNAL_TRAP;
       break;
     case EXCEPTION_ILLEGAL_INSTRUCTION:
       OUTMSG2 (("EXCEPTION_ILLEGAL_INSTRUCTION"));
-      ourstatus->value.sig = TARGET_SIGNAL_ILL;
+      ourstatus->value.sig = GDB_SIGNAL_ILL;
       break;
     case EXCEPTION_PRIV_INSTRUCTION:
       OUTMSG2 (("EXCEPTION_PRIV_INSTRUCTION"));
-      ourstatus->value.sig = TARGET_SIGNAL_ILL;
+      ourstatus->value.sig = GDB_SIGNAL_ILL;
       break;
     case EXCEPTION_NONCONTINUABLE_EXCEPTION:
       OUTMSG2 (("EXCEPTION_NONCONTINUABLE_EXCEPTION"));
-      ourstatus->value.sig = TARGET_SIGNAL_ILL;
+      ourstatus->value.sig = GDB_SIGNAL_ILL;
       break;
     default:
       if (current_event.u.Exception.dwFirstChance)
@@ -1314,11 +1308,11 @@ handle_exception (struct target_waitstatus *ourstatus)
 	  ourstatus->kind = TARGET_WAITKIND_SPURIOUS;
 	  return;
 	}
-      OUTMSG2 (("gdbserver: unknown target exception 0x%08lx at 0x%s",
-		current_event.u.Exception.ExceptionRecord.ExceptionCode,
-		phex_nz ((uintptr_t) current_event.u.Exception.ExceptionRecord.
-		ExceptionAddress, sizeof (uintptr_t))));
-      ourstatus->value.sig = TARGET_SIGNAL_UNKNOWN;
+      OUTMSG2 (("gdbserver: unknown target exception 0x%08x at 0x%s",
+	    (unsigned) current_event.u.Exception.ExceptionRecord.ExceptionCode,
+	    phex_nz ((uintptr_t) current_event.u.Exception.ExceptionRecord.
+	    ExceptionAddress, sizeof (uintptr_t))));
+      ourstatus->value.sig = GDB_SIGNAL_UNKNOWN;
       break;
     }
   OUTMSG2 (("\n"));
@@ -1376,7 +1370,7 @@ get_child_debug_event (struct target_waitstatus *ourstatus)
 {
   ptid_t ptid;
 
-  last_sig = TARGET_SIGNAL_0;
+  last_sig = GDB_SIGNAL_0;
   ourstatus->kind = TARGET_WAITKIND_SPURIOUS;
 
   /* Check if GDB sent us an interrupt request.  */
@@ -1449,7 +1443,7 @@ get_child_debug_event (struct target_waitstatus *ourstatus)
     {
     case CREATE_THREAD_DEBUG_EVENT:
       OUTMSG2 (("gdbserver: kernel event CREATE_THREAD_DEBUG_EVENT "
-		"for pid=%d tid=%x)\n",
+		"for pid=%u tid=%x)\n",
 		(unsigned) current_event.dwProcessId,
 		(unsigned) current_event.dwThreadId));
 
@@ -1462,7 +1456,7 @@ get_child_debug_event (struct target_waitstatus *ourstatus)
 
     case EXIT_THREAD_DEBUG_EVENT:
       OUTMSG2 (("gdbserver: kernel event EXIT_THREAD_DEBUG_EVENT "
-		"for pid=%d tid=%x\n",
+		"for pid=%u tid=%x\n",
 		(unsigned) current_event.dwProcessId,
 		(unsigned) current_event.dwThreadId));
       child_delete_thread (current_event.dwProcessId,
@@ -1473,7 +1467,7 @@ get_child_debug_event (struct target_waitstatus *ourstatus)
 
     case CREATE_PROCESS_DEBUG_EVENT:
       OUTMSG2 (("gdbserver: kernel event CREATE_PROCESS_DEBUG_EVENT "
-		"for pid=%d tid=%x\n",
+		"for pid=%u tid=%x\n",
 		(unsigned) current_event.dwProcessId,
 		(unsigned) current_event.dwThreadId));
       CloseHandle (current_event.u.CreateProcessInfo.hFile);
@@ -1507,7 +1501,7 @@ get_child_debug_event (struct target_waitstatus *ourstatus)
 
     case EXIT_PROCESS_DEBUG_EVENT:
       OUTMSG2 (("gdbserver: kernel event EXIT_PROCESS_DEBUG_EVENT "
-		"for pid=%d tid=%x\n",
+		"for pid=%u tid=%x\n",
 		(unsigned) current_event.dwProcessId,
 		(unsigned) current_event.dwThreadId));
       ourstatus->kind = TARGET_WAITKIND_EXITED;
@@ -1519,29 +1513,33 @@ get_child_debug_event (struct target_waitstatus *ourstatus)
 
     case LOAD_DLL_DEBUG_EVENT:
       OUTMSG2 (("gdbserver: kernel event LOAD_DLL_DEBUG_EVENT "
-		"for pid=%d tid=%x\n",
+		"for pid=%u tid=%x\n",
 		(unsigned) current_event.dwProcessId,
 		(unsigned) current_event.dwThreadId));
       CloseHandle (current_event.u.LoadDll.hFile);
+      if (! child_initialization_done)
+	break;
       handle_load_dll ();
 
       ourstatus->kind = TARGET_WAITKIND_LOADED;
-      ourstatus->value.sig = TARGET_SIGNAL_TRAP;
+      ourstatus->value.sig = GDB_SIGNAL_TRAP;
       break;
 
     case UNLOAD_DLL_DEBUG_EVENT:
       OUTMSG2 (("gdbserver: kernel event UNLOAD_DLL_DEBUG_EVENT "
-		"for pid=%d tid=%x\n",
+		"for pid=%u tid=%x\n",
 		(unsigned) current_event.dwProcessId,
 		(unsigned) current_event.dwThreadId));
+      if (! child_initialization_done)
+	break;
       handle_unload_dll ();
       ourstatus->kind = TARGET_WAITKIND_LOADED;
-      ourstatus->value.sig = TARGET_SIGNAL_TRAP;
+      ourstatus->value.sig = GDB_SIGNAL_TRAP;
       break;
 
     case EXCEPTION_DEBUG_EVENT:
       OUTMSG2 (("gdbserver: kernel event EXCEPTION_DEBUG_EVENT "
-		"for pid=%d tid=%x\n",
+		"for pid=%u tid=%x\n",
 		(unsigned) current_event.dwProcessId,
 		(unsigned) current_event.dwThreadId));
       handle_exception (ourstatus);
@@ -1550,7 +1548,7 @@ get_child_debug_event (struct target_waitstatus *ourstatus)
     case OUTPUT_DEBUG_STRING_EVENT:
       /* A message from the kernel (or Cygwin).  */
       OUTMSG2 (("gdbserver: kernel event OUTPUT_DEBUG_STRING_EVENT "
-		"for pid=%d tid=%x\n",
+		"for pid=%u tid=%x\n",
 		(unsigned) current_event.dwProcessId,
 		(unsigned) current_event.dwThreadId));
       handle_output_debug_string (ourstatus);
@@ -1558,10 +1556,10 @@ get_child_debug_event (struct target_waitstatus *ourstatus)
 
     default:
       OUTMSG2 (("gdbserver: kernel event unknown "
-		"for pid=%d tid=%x code=%ld\n",
+		"for pid=%u tid=%x code=%x\n",
 		(unsigned) current_event.dwProcessId,
 		(unsigned) current_event.dwThreadId,
-		current_event.dwDebugEventCode));
+		(unsigned) current_event.dwDebugEventCode));
       break;
     }
 
@@ -1578,6 +1576,17 @@ static ptid_t
 win32_wait (ptid_t ptid, struct target_waitstatus *ourstatus, int options)
 {
   struct regcache *regcache;
+
+  if (cached_status.kind != TARGET_WAITKIND_IGNORE)
+    {
+      /* The core always does a wait after creating the inferior, and
+	 do_initial_child_stuff already ran the inferior to the
+	 initial breakpoint (or an exit, if creating the process
+	 fails).  Report it now.  */
+      *ourstatus = cached_status;
+      cached_status.kind = TARGET_WAITKIND_IGNORE;
+      return debug_event_ptid (&current_event);
+    }
 
   while (1)
     {
@@ -1598,21 +1607,6 @@ win32_wait (ptid_t ptid, struct target_waitstatus *ourstatus, int options)
 
 	  regcache = get_thread_regcache (current_inferior, 1);
 	  child_fetch_inferior_registers (regcache, -1);
-
-	  if (ourstatus->kind == TARGET_WAITKIND_LOADED
-	      && !server_waiting)
-	    {
-	      /* When gdb connects, we want to be stopped at the
-		 initial breakpoint, not in some dll load event.  */
-	      child_continue (DBG_CONTINUE, -1);
-	      break;
-	    }
-
-	  /* We don't expose _LOADED events to gdbserver core.  See
-	     the `dlls_changed' global.  */
-	  if (ourstatus->kind == TARGET_WAITKIND_LOADED)
-	    ourstatus->kind = TARGET_WAITKIND_STOPPED;
-
 	  return debug_event_ptid (&current_event);
 	default:
 	  OUTMSG (("Ignoring unknown internal event, %d\n", ourstatus->kind));
@@ -1781,11 +1775,14 @@ static struct target_ops win32_target_ops = {
   win32_wait,
   win32_fetch_inferior_registers,
   win32_store_inferior_registers,
+  NULL, /* prepare_to_access_memory */
+  NULL, /* done_accessing_memory */
   win32_read_inferior_memory,
   win32_write_inferior_memory,
   NULL, /* lookup_symbols */
   win32_request_interrupt,
   NULL, /* read_auxv */
+  win32_supports_z_point_type,
   win32_insert_point,
   win32_remove_point,
   win32_stopped_by_watchpoint,
@@ -1806,6 +1803,7 @@ static struct target_ops win32_target_ops = {
   NULL, /* supports_multi_process */
   NULL, /* handle_monitor_command */
   NULL, /* core_of_thread */
+  NULL, /* read_loadmap */
   NULL, /* process_qsupported */
   NULL, /* supports_tracepoints */
   NULL, /* read_pc */

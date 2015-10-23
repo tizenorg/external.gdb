@@ -1,7 +1,6 @@
 /* Native-dependent code for VAX UNIXen (including older BSD's).
 
-   Copyright (C) 2004, 2005, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2004-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -45,7 +44,7 @@
 #include "vax-tdep.h"
 #include "inf-ptrace.h"
 
-/* Address of the user structure.  This is the the value for 32V; 3BSD
+/* Address of the user structure.  This is the value for 32V; 3BSD
    uses a different value, but hey, who's still using those systems?  */
 static CORE_ADDR vax_kernel_u_addr = 0x80020000;
 
@@ -75,7 +74,7 @@ vax_register_u_offset (struct gdbarch *gdbarch, int regnum, int store_p)
   int pid;
 
   errno = 0;
-  pid = PIDGET (inferior_ptid);
+  pid = ptid_get_pid (inferior_ptid);
   u_ar0 = ptrace (PT_READ_U, pid, u_ar0_offset, 0);
   if (errno)
     perror_with_name (_("Unable to determine location of registers"));

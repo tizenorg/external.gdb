@@ -1,5 +1,5 @@
 /* Functions for deciding which macros are currently in scope.
-   Copyright (C) 2002, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
    Contributed by Red Hat, Inc.
 
    This file is part of GDB.
@@ -77,7 +77,7 @@ sal_macro_scope (struct symtab_and_line sal)
       complaint (&symfile_complaints,
                  _("symtab found for `%s', but that file\n"
                  "is not covered in the compilation unit's macro information"),
-                 sal.symtab->filename);
+                 symtab_to_filename_for_display (sal.symtab));
     }
 
   return ms;
@@ -101,12 +101,13 @@ default_macro_scope (void)
   struct symtab_and_line sal;
   struct macro_scope *ms;
   struct frame_info *frame;
+  CORE_ADDR pc;
 
   /* If there's a selected frame, use its PC.  */
   frame = deprecated_safe_get_selected_frame ();
-  if (frame)
-    sal = find_pc_line (get_frame_pc (frame), 0);
-  
+  if (frame && get_frame_pc_if_available (frame, &pc))
+    sal = find_pc_line (pc, 0);
+
   /* Fall back to the current listing position.  */
   else
     {
@@ -158,7 +159,7 @@ extern initialize_file_ftype _initialize_macroscope;
 void
 _initialize_macroscope (void)
 {
-  macro_user_macros = new_macro_table (0, 0);
+  macro_user_macros = new_macro_table (NULL, NULL, NULL);
   macro_set_main (macro_user_macros, "<user-defined>");
   macro_allow_redefinitions (macro_user_macros);
 }

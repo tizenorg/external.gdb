@@ -1,6 +1,5 @@
 /* .eh_frame section optimization.
-   Copyright 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2001-2014 Free Software Foundation, Inc.
    Written by Jakub Jelinek <jakub@redhat.com>.
 
    This file is part of BFD, the Binary File Descriptor library.
@@ -41,7 +40,10 @@ struct cie
   bfd_vma augmentation_size;
   union {
     struct elf_link_hash_entry *h;
-    bfd_vma val;
+    struct {
+      unsigned int bfd_id;
+      unsigned int index;
+    } sym;
     unsigned int reloc_index;
   } personality;
   asection *output_sec;
@@ -235,6 +237,7 @@ cie_eq (const void *e1, const void *e2)
       && c1->lsda_encoding == c2->lsda_encoding
       && c1->fde_encoding == c2->fde_encoding
       && c1->initial_insn_length == c2->initial_insn_length
+      && c1->initial_insn_length <= sizeof (c1->initial_instructions)
       && memcmp (c1->initial_instructions,
 		 c2->initial_instructions,
 		 c1->initial_insn_length) == 0)
@@ -254,6 +257,7 @@ static hashval_t
 cie_compute_hash (struct cie *c)
 {
   hashval_t h = 0;
+  size_t len;
   h = iterative_hash_object (c->length, h);
   h = iterative_hash_object (c->version, h);
   h = iterative_hash (c->augmentation, strlen (c->augmentation) + 1, h);
@@ -267,7 +271,10 @@ cie_compute_hash (struct cie *c)
   h = iterative_hash_object (c->lsda_encoding, h);
   h = iterative_hash_object (c->fde_encoding, h);
   h = iterative_hash_object (c->initial_insn_length, h);
-  h = iterative_hash (c->initial_instructions, c->initial_insn_length, h);
+  len = c->initial_insn_length;
+  if (len > sizeof (c->initial_instructions))
+    len = sizeof (c->initial_instructions);
+  h = iterative_hash (c->initial_instructions, len, h);
   c->hash = h;
   return h;
 }
@@ -490,7 +497,8 @@ _bfd_elf_parse_eh_frame (bfd *abfd, struct bfd_link_info *info,
   if (hdr_info->parsed_eh_frames)
     return;
 
-  if (sec->size == 0)
+  if (sec->size == 0
+      || sec->sec_info_type != SEC_INFO_TYPE_NONE)
     {
       /* This file does not contain .eh_frame information.  */
       return;
@@ -761,11 +769,10 @@ _bfd_elf_parse_eh_frame (bfd *abfd, struct bfd_link_info *info,
 	    cie->fde_encoding = DW_EH_PE_absptr;
 
 	  initial_insn_length = end - buf;
-	  if (initial_insn_length <= sizeof (cie->initial_instructions))
-	    {
-	      cie->initial_insn_length = initial_insn_length;
-	      memcpy (cie->initial_instructions, buf, initial_insn_length);
-	    }
+	  cie->initial_insn_length = initial_insn_length;
+	  memcpy (cie->initial_instructions, buf,
+		  initial_insn_length <= sizeof (cie->initial_instructions)
+		  ? initial_insn_length : sizeof (cie->initial_instructions));
 	  insns = buf;
 	  buf += initial_insn_length;
 	  ENSURE_NO_RELOCS (buf);
@@ -777,8 +784,6 @@ _bfd_elf_parse_eh_frame (bfd *abfd, struct bfd_link_info *info,
 	}
       else
 	{
-	  asection *rsec;
-
 	  /* Find the corresponding CIE.  */
 	  unsigned int cie_offset = this_inf->offset + 4 - hdr_id;
 	  for (cie = local_cies; cie < local_cies + cie_count; cie++)
@@ -794,17 +799,22 @@ _bfd_elf_parse_eh_frame (bfd *abfd, struct bfd_link_info *info,
 	    = cie->cie_inf->add_augmentation_size;
 
 	  ENSURE_NO_RELOCS (buf);
-	  REQUIRE (GET_RELOC (buf));
-
-	  /* Chain together the FDEs for each section.  */
-	  rsec = _bfd_elf_gc_mark_rsec (info, sec, gc_mark_hook, cookie);
-	  /* RSEC will be NULL if FDE was cleared out as it was belonging to
-	     a discarded SHT_GROUP.  */
-	  if (rsec)
+	  if ((sec->flags & SEC_LINKER_CREATED) == 0 || cookie->rels != NULL)
 	    {
-	      REQUIRE (rsec->owner == abfd);
-	      this_inf->u.fde.next_for_section = elf_fde_list (rsec);
-	      elf_fde_list (rsec) = this_inf;
+	      asection *rsec;
+
+	      REQUIRE (GET_RELOC (buf));
+
+	      /* Chain together the FDEs for each section.  */
+	      rsec = _bfd_elf_gc_mark_rsec (info, sec, gc_mark_hook, cookie);
+	      /* RSEC will be NULL if FDE was cleared out as it was belonging to
+		 a discarded SHT_GROUP.  */
+	      if (rsec)
+		{
+		  REQUIRE (rsec->owner == abfd);
+		  this_inf->u.fde.next_for_section = elf_fde_list (rsec);
+		  elf_fde_list (rsec) = this_inf;
+		}
 	    }
 
 	  /* Skip the initial location and address range.  */
@@ -900,7 +910,7 @@ _bfd_elf_parse_eh_frame (bfd *abfd, struct bfd_link_info *info,
   BFD_ASSERT (cie_count == num_cies);
 
   elf_section_data (sec)->sec_info = sec_info;
-  sec->sec_info_type = ELF_INFO_TYPE_EH_FRAME;
+  sec->sec_info_type = SEC_INFO_TYPE_EH_FRAME;
   if (hdr_info->merge_cies)
     {
       sec_info->cies = local_cies;
@@ -1023,8 +1033,12 @@ find_merged_cie (bfd *abfd, struct bfd_link_info *info, asection *sec,
     {
       bfd_boolean per_binds_local;
 
-      /* Work out the address of personality routine, either as an absolute
-	 value or as a symbol.  */
+      /* Work out the address of personality routine, or at least
+	 enough info that we could calculate the address had we made a
+	 final section layout.  The symbol on the reloc is enough,
+	 either the hash for a global, or (bfd id, index) pair for a
+	 local.  The assumption here is that no one uses addends on
+	 the reloc.  */
       rel = cookie->rels + cie->personality.reloc_index;
       memset (&cie->personality, 0, sizeof (cie->personality));
 #ifdef BFD64
@@ -1064,9 +1078,8 @@ find_merged_cie (bfd *abfd, struct bfd_link_info *info, asection *sec,
 	    return cie_inf;
 
 	  cie->local_personality = 1;
-	  cie->personality.val = (sym->st_value
-				  + sym_sec->output_offset
-				  + sym_sec->output_section->vma);
+	  cie->personality.sym.bfd_id = abfd->id;
+	  cie->personality.sym.index = r_symndx;
 	  per_binds_local = TRUE;
 	}
 
@@ -1133,9 +1146,15 @@ _bfd_elf_discard_section_eh_frame
   struct eh_frame_hdr_info *hdr_info;
   unsigned int ptr_size, offset;
 
+  if (sec->sec_info_type != SEC_INFO_TYPE_EH_FRAME)
+    return FALSE;
+
   sec_info = (struct eh_frame_sec_info *) elf_section_data (sec)->sec_info;
   if (sec_info == NULL)
     return FALSE;
+
+  ptr_size = (get_elf_backend_data (sec->owner)
+	      ->elf_backend_eh_frame_address_size (sec->owner, sec));
 
   hdr_info = &elf_hash_table (info)->eh_info;
   for (ent = sec_info->entry; ent < sec_info->entry + sec_info->count; ++ent)
@@ -1145,11 +1164,25 @@ _bfd_elf_discard_section_eh_frame
       ent->removed = sec->map_head.s != NULL;
     else if (!ent->cie)
       {
-	cookie->rel = cookie->rels + ent->reloc_index;
-	/* FIXME: octets_per_byte.  */
-	BFD_ASSERT (cookie->rel < cookie->relend
-		    && cookie->rel->r_offset == ent->offset + 8);
-	if (!(*reloc_symbol_deleted_p) (ent->offset + 8, cookie))
+	bfd_boolean keep;
+	if ((sec->flags & SEC_LINKER_CREATED) != 0 && cookie->rels == NULL)
+	  {
+	    unsigned int width
+	      = get_DW_EH_PE_width (ent->fde_encoding, ptr_size);
+	    bfd_vma value
+	      = read_value (abfd, sec->contents + ent->offset + 8 + width,
+			    width, get_DW_EH_PE_signed (ent->fde_encoding));
+	    keep = value != 0;
+	  }
+	else
+	  {
+	    cookie->rel = cookie->rels + ent->reloc_index;
+	    /* FIXME: octets_per_byte.  */
+	    BFD_ASSERT (cookie->rel < cookie->relend
+			&& cookie->rel->r_offset == ent->offset + 8);
+	    keep = !(*reloc_symbol_deleted_p) (ent->offset + 8, cookie);
+	  }
+	if (keep)
 	  {
 	    if (info->shared
 		&& (((ent->fde_encoding & 0x70) == DW_EH_PE_absptr
@@ -1178,8 +1211,6 @@ _bfd_elf_discard_section_eh_frame
       sec_info->cies = NULL;
     }
 
-  ptr_size = (get_elf_backend_data (sec->owner)
-	      ->elf_backend_eh_frame_address_size (sec->owner, sec));
   offset = 0;
   for (ent = sec_info->entry; ent < sec_info->entry + sec_info->count; ++ent)
     if (!ent->removed)
@@ -1221,8 +1252,28 @@ _bfd_elf_discard_section_eh_frame_hdr (bfd *abfd, struct bfd_link_info *info)
   if (hdr_info->table)
     sec->size += 4 + hdr_info->fde_count * 8;
 
-  elf_tdata (abfd)->eh_frame_hdr = sec;
+  elf_eh_frame_hdr (abfd) = sec;
   return TRUE;
+}
+
+/* Return true if there is at least one non-empty .eh_frame section in
+   input files.  Can only be called after ld has mapped input to
+   output sections, and before sections are stripped.  */
+bfd_boolean
+_bfd_elf_eh_frame_present (struct bfd_link_info *info)
+{
+  asection *eh = bfd_get_section_by_name (info->output_bfd, ".eh_frame");
+
+  if (eh == NULL)
+    return FALSE;
+
+  /* Count only sections which have at least a single CIE or FDE.
+     There cannot be any CIE or FDE <= 8 bytes.  */
+  for (eh = eh->map_head.s; eh != NULL; eh = eh->map_head.s)
+    if (eh->size > 8)
+      return TRUE;
+
+  return FALSE;
 }
 
 /* This function is called from size_dynamic_sections.
@@ -1233,8 +1284,6 @@ _bfd_elf_discard_section_eh_frame_hdr (bfd *abfd, struct bfd_link_info *info)
 bfd_boolean
 _bfd_elf_maybe_strip_eh_frame_hdr (struct bfd_link_info *info)
 {
-  asection *o;
-  bfd *abfd;
   struct elf_link_hash_table *htab;
   struct eh_frame_hdr_info *hdr_info;
 
@@ -1243,24 +1292,9 @@ _bfd_elf_maybe_strip_eh_frame_hdr (struct bfd_link_info *info)
   if (hdr_info->hdr_sec == NULL)
     return TRUE;
 
-  if (bfd_is_abs_section (hdr_info->hdr_sec->output_section))
-    {
-      hdr_info->hdr_sec = NULL;
-      return TRUE;
-    }
-
-  abfd = NULL;
-  if (info->eh_frame_hdr)
-    for (abfd = info->input_bfds; abfd != NULL; abfd = abfd->link_next)
-      {
-	/* Count only sections which have at least a single CIE or FDE.
-	   There cannot be any CIE or FDE <= 8 bytes.  */
-	o = bfd_get_section_by_name (abfd, ".eh_frame");
-	if (o && o->size > 8 && !bfd_is_abs_section (o->output_section))
-	  break;
-      }
-
-  if (abfd == NULL)
+  if (bfd_is_abs_section (hdr_info->hdr_sec->output_section)
+      || !info->eh_frame_hdr
+      || !_bfd_elf_eh_frame_present (info))
     {
       hdr_info->hdr_sec->flags |= SEC_EXCLUDE;
       hdr_info->hdr_sec = NULL;
@@ -1285,7 +1319,7 @@ _bfd_elf_eh_frame_section_offset (bfd *output_bfd ATTRIBUTE_UNUSED,
   struct eh_frame_sec_info *sec_info;
   unsigned int lo, hi, mid;
 
-  if (sec->sec_info_type != ELF_INFO_TYPE_EH_FRAME)
+  if (sec->sec_info_type != SEC_INFO_TYPE_EH_FRAME)
     return offset;
   sec_info = (struct eh_frame_sec_info *) elf_section_data (sec)->sec_info;
 
@@ -1373,7 +1407,7 @@ _bfd_elf_write_section_eh_frame (bfd *abfd,
   unsigned int ptr_size;
   struct eh_cie_fde *ent;
 
-  if (sec->sec_info_type != ELF_INFO_TYPE_EH_FRAME)
+  if (sec->sec_info_type != SEC_INFO_TYPE_EH_FRAME)
     /* FIXME: octets_per_byte.  */
     return bfd_set_section_contents (abfd, sec->output_section, contents,
 				     sec->output_offset, sec->size);
@@ -1572,10 +1606,31 @@ _bfd_elf_write_section_eh_frame (bfd *abfd,
 		  break;
 		case DW_EH_PE_datarel:
 		  {
-		    asection *got = bfd_get_section_by_name (abfd, ".got");
-
-		    BFD_ASSERT (got != NULL);
-		    address += got->vma;
+		    switch (abfd->arch_info->arch)
+		      {
+		      case bfd_arch_ia64:
+			BFD_ASSERT (elf_gp (abfd) != 0);
+			address += elf_gp (abfd);
+			break;
+		      default:
+			(*info->callbacks->einfo)
+			  (_("%P: DW_EH_PE_datarel unspecified"
+			     " for this architecture.\n"));
+			/* Fall thru */
+		      case bfd_arch_frv:
+		      case bfd_arch_i386:
+			BFD_ASSERT (htab->hgot != NULL
+				    && ((htab->hgot->root.type
+					 == bfd_link_hash_defined)
+					|| (htab->hgot->root.type
+					    == bfd_link_hash_defweak)));
+			address
+			  += (htab->hgot->root.u.def.value
+			      + htab->hgot->root.u.def.section->output_offset
+			      + (htab->hgot->root.u.def.section->output_section
+				 ->vma));
+			break;
+		      }
 		  }
 		  break;
 		case DW_EH_PE_pcrel:
@@ -1596,6 +1651,11 @@ _bfd_elf_write_section_eh_frame (bfd *abfd,
 
 	  if (hdr_info)
 	    {
+	      /* The address calculation may overflow, giving us a
+		 value greater than 4G on a 32-bit target when
+		 dwarf_vma is 64-bit.  */
+	      if (sizeof (address) > 4 && ptr_size == 4)
+		address &= 0xffffffff;
 	      hdr_info->array[hdr_info->array_count].initial_loc = address;
 	      hdr_info->array[hdr_info->array_count++].fde
 		= (sec->output_section->vma
@@ -1719,74 +1779,81 @@ _bfd_elf_write_section_eh_frame_hdr (bfd *abfd, struct bfd_link_info *info)
   struct elf_link_hash_table *htab;
   struct eh_frame_hdr_info *hdr_info;
   asection *sec;
-  bfd_byte *contents;
-  asection *eh_frame_sec;
-  bfd_size_type size;
-  bfd_boolean retval;
-  bfd_vma encoded_eh_frame;
+  bfd_boolean retval = TRUE;
 
   htab = elf_hash_table (info);
   hdr_info = &htab->eh_info;
   sec = hdr_info->hdr_sec;
-  if (sec == NULL)
-    return TRUE;
 
-  size = EH_FRAME_HDR_SIZE;
-  if (hdr_info->array && hdr_info->array_count == hdr_info->fde_count)
-    size += 4 + hdr_info->fde_count * 8;
-  contents = (bfd_byte *) bfd_malloc (size);
-  if (contents == NULL)
-    return FALSE;
-
-  eh_frame_sec = bfd_get_section_by_name (abfd, ".eh_frame");
-  if (eh_frame_sec == NULL)
+  if (info->eh_frame_hdr && sec != NULL)
     {
-      free (contents);
-      return FALSE;
-    }
+      bfd_byte *contents;
+      asection *eh_frame_sec;
+      bfd_size_type size;
+      bfd_vma encoded_eh_frame;
 
-  memset (contents, 0, EH_FRAME_HDR_SIZE);
-  contents[0] = 1;				/* Version.  */
-  contents[1] = get_elf_backend_data (abfd)->elf_backend_encode_eh_address
-    (abfd, info, eh_frame_sec, 0, sec, 4,
-     &encoded_eh_frame);			/* .eh_frame offset.  */
+      size = EH_FRAME_HDR_SIZE;
+      if (hdr_info->array && hdr_info->array_count == hdr_info->fde_count)
+	size += 4 + hdr_info->fde_count * 8;
+      contents = (bfd_byte *) bfd_malloc (size);
+      if (contents == NULL)
+	return FALSE;
 
-  if (hdr_info->array && hdr_info->array_count == hdr_info->fde_count)
-    {
-      contents[2] = DW_EH_PE_udata4;		/* FDE count encoding.  */
-      contents[3] = DW_EH_PE_datarel | DW_EH_PE_sdata4; /* Search table enc.  */
-    }
-  else
-    {
-      contents[2] = DW_EH_PE_omit;
-      contents[3] = DW_EH_PE_omit;
-    }
-  bfd_put_32 (abfd, encoded_eh_frame, contents + 4);
-
-  if (contents[2] != DW_EH_PE_omit)
-    {
-      unsigned int i;
-
-      bfd_put_32 (abfd, hdr_info->fde_count, contents + EH_FRAME_HDR_SIZE);
-      qsort (hdr_info->array, hdr_info->fde_count, sizeof (*hdr_info->array),
-	     vma_compare);
-      for (i = 0; i < hdr_info->fde_count; i++)
+      eh_frame_sec = bfd_get_section_by_name (abfd, ".eh_frame");
+      if (eh_frame_sec == NULL)
 	{
-	  bfd_put_32 (abfd,
-		      hdr_info->array[i].initial_loc
-		      - sec->output_section->vma,
-		      contents + EH_FRAME_HDR_SIZE + i * 8 + 4);
-	  bfd_put_32 (abfd,
-		      hdr_info->array[i].fde - sec->output_section->vma,
-		      contents + EH_FRAME_HDR_SIZE + i * 8 + 8);
+	  free (contents);
+	  return FALSE;
 	}
-    }
 
-  /* FIXME: octets_per_byte.  */
-  retval = bfd_set_section_contents (abfd, sec->output_section,
-				     contents, (file_ptr) sec->output_offset,
-				     sec->size);
-  free (contents);
+      memset (contents, 0, EH_FRAME_HDR_SIZE);
+      /* Version.  */
+      contents[0] = 1;
+      /* .eh_frame offset.  */
+      contents[1] = get_elf_backend_data (abfd)->elf_backend_encode_eh_address
+	(abfd, info, eh_frame_sec, 0, sec, 4, &encoded_eh_frame);
+
+      if (hdr_info->array && hdr_info->array_count == hdr_info->fde_count)
+	{
+	  /* FDE count encoding.  */
+	  contents[2] = DW_EH_PE_udata4;
+	  /* Search table encoding.  */
+	  contents[3] = DW_EH_PE_datarel | DW_EH_PE_sdata4;
+	}
+      else
+	{
+	  contents[2] = DW_EH_PE_omit;
+	  contents[3] = DW_EH_PE_omit;
+	}
+      bfd_put_32 (abfd, encoded_eh_frame, contents + 4);
+
+      if (contents[2] != DW_EH_PE_omit)
+	{
+	  unsigned int i;
+
+	  bfd_put_32 (abfd, hdr_info->fde_count, contents + EH_FRAME_HDR_SIZE);
+	  qsort (hdr_info->array, hdr_info->fde_count,
+		 sizeof (*hdr_info->array), vma_compare);
+	  for (i = 0; i < hdr_info->fde_count; i++)
+	    {
+	      bfd_put_32 (abfd,
+			  hdr_info->array[i].initial_loc
+			  - sec->output_section->vma,
+			  contents + EH_FRAME_HDR_SIZE + i * 8 + 4);
+	      bfd_put_32 (abfd,
+			  hdr_info->array[i].fde - sec->output_section->vma,
+			  contents + EH_FRAME_HDR_SIZE + i * 8 + 8);
+	    }
+	}
+
+      /* FIXME: octets_per_byte.  */
+      retval = bfd_set_section_contents (abfd, sec->output_section, contents,
+					 (file_ptr) sec->output_offset,
+					 sec->size);
+      free (contents);
+    }
+  if (hdr_info->array != NULL)
+    free (hdr_info->array);
   return retval;
 }
 

@@ -1,8 +1,6 @@
 /* Target-dependent code for the HP PA-RISC architecture.
 
-   Copyright (C) 1986, 1987, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996,
-   1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 1986-2014 Free Software Foundation, Inc.
 
    Contributed by the Center for Software Science at the
    University of Utah (pa-gdb-bugs@cs.utah.edu).
@@ -30,7 +28,7 @@
 #include "osabi.h"
 #include "gdb_assert.h"
 #include "arch-utils.h"
-/* For argument passing to the inferior */
+/* For argument passing to the inferior.  */
 #include "symtab.h"
 #include "dis-asm.h"
 #include "trad-frame.h"
@@ -57,7 +55,7 @@ static const int hppa64_num_regs = 96;
    by hppa-hpux-tdep.c and shared with pa64solib.c and somsolib.c.  */
 const struct objfile_data *hppa_objfile_priv_data = NULL;
 
-/* Get at various relevent fields of an instruction word. */
+/* Get at various relevent fields of an instruction word.  */
 #define MASK_5 0x1f
 #define MASK_11 0x7ff
 #define MASK_14 0x3fff
@@ -68,10 +66,10 @@ const struct objfile_data *hppa_objfile_priv_data = NULL;
 #define STUB_UNWIND_ENTRY_SIZE 8
 
 /* Routines to extract various sized constants out of hppa 
-   instructions. */
+   instructions.  */
 
 /* This assumes that no garbage lies outside of the lower bits of 
-   value. */
+   value.  */
 
 static int
 hppa_sign_extend (unsigned val, unsigned bits)
@@ -79,7 +77,7 @@ hppa_sign_extend (unsigned val, unsigned bits)
   return (int) (val >> (bits - 1) ? (-1 << bits) | val : val);
 }
 
-/* For many immediate values the sign bit is the low bit! */
+/* For many immediate values the sign bit is the low bit!  */
 
 static int
 hppa_low_hppa_sign_extend (unsigned val, unsigned bits)
@@ -88,7 +86,7 @@ hppa_low_hppa_sign_extend (unsigned val, unsigned bits)
 }
 
 /* Extract the bits at positions between FROM and TO, using HP's numbering
-   (MSB = 0). */
+   (MSB = 0).  */
 
 int
 hppa_get_field (unsigned word, int from, int to)
@@ -96,7 +94,7 @@ hppa_get_field (unsigned word, int from, int to)
   return ((word) >> (31 - (to)) & ((1 << ((to) - (from) + 1)) - 1));
 }
 
-/* extract the immediate field from a ld{bhw}s instruction */
+/* Extract the immediate field from a ld{bhw}s instruction.  */
 
 int
 hppa_extract_5_load (unsigned word)
@@ -104,7 +102,7 @@ hppa_extract_5_load (unsigned word)
   return hppa_low_hppa_sign_extend (word >> 16 & MASK_5, 5);
 }
 
-/* extract the immediate field from a break instruction */
+/* Extract the immediate field from a break instruction.  */
 
 unsigned
 hppa_extract_5r_store (unsigned word)
@@ -112,7 +110,7 @@ hppa_extract_5r_store (unsigned word)
   return (word & MASK_5);
 }
 
-/* extract the immediate field from a {sr}sm instruction */
+/* Extract the immediate field from a {sr}sm instruction.  */
 
 unsigned
 hppa_extract_5R_store (unsigned word)
@@ -120,7 +118,7 @@ hppa_extract_5R_store (unsigned word)
   return (word >> 16 & MASK_5);
 }
 
-/* extract a 14 bit immediate field */
+/* Extract a 14 bit immediate field.  */
 
 int
 hppa_extract_14 (unsigned word)
@@ -128,7 +126,7 @@ hppa_extract_14 (unsigned word)
   return hppa_low_hppa_sign_extend (word & MASK_14, 14);
 }
 
-/* extract a 21 bit constant */
+/* Extract a 21 bit constant.  */
 
 int
 hppa_extract_21 (unsigned word)
@@ -150,7 +148,7 @@ hppa_extract_21 (unsigned word)
 }
 
 /* extract a 17 bit constant from branch instructions, returning the
-   19 bit signed value. */
+   19 bit signed value.  */
 
 int
 hppa_extract_17 (unsigned word)
@@ -164,11 +162,11 @@ hppa_extract_17 (unsigned word)
 CORE_ADDR 
 hppa_symbol_address(const char *sym)
 {
-  struct minimal_symbol *minsym;
+  struct bound_minimal_symbol minsym;
 
   minsym = lookup_minimal_symbol (sym, NULL, NULL);
-  if (minsym)
-    return SYMBOL_VALUE_ADDRESS (minsym);
+  if (minsym.minsym)
+    return BMSYMBOL_VALUE_ADDRESS (minsym);
   else
     return (CORE_ADDR)-1;
 }
@@ -222,8 +220,8 @@ record_text_segment_lowaddr (bfd *abfd, asection *section, void *data)
 
 static void
 internalize_unwinds (struct objfile *objfile, struct unwind_table_entry *table,
-		     asection *section, unsigned int entries, unsigned int size,
-		     CORE_ADDR text_offset)
+		     asection *section, unsigned int entries,
+		     unsigned int size, CORE_ADDR text_offset)
 {
   /* We will read the unwind entries into temporary memory, then
      fill in the actual unwind table.  */
@@ -237,7 +235,7 @@ internalize_unwinds (struct objfile *objfile, struct unwind_table_entry *table,
       CORE_ADDR low_text_segment_address;
 
       /* For ELF targets, then unwinds are supposed to
-	 be segment relative offsets instead of absolute addresses. 
+	 be segment relative offsets instead of absolute addresses.
 
 	 Note that when loading a shared library (text_offset != 0) the
 	 unwinds are already relative to the text_offset that will be
@@ -305,7 +303,7 @@ internalize_unwinds (struct objfile *objfile, struct unwind_table_entry *table,
 	  table[i].reserved2 = (tmp >> 27) & 0x1;
 	  table[i].Total_frame_size = tmp & 0x7ffffff;
 
-	  /* Stub unwinds are handled elsewhere. */
+	  /* Stub unwinds are handled elsewhere.  */
 	  table[i].stub_unwind.stub_type = 0;
 	  table[i].stub_unwind.padding = 0;
 	}
@@ -329,7 +327,7 @@ read_unwind_info (struct objfile *objfile)
   struct hppa_unwind_info *ui;
   struct hppa_objfile_private *obj_private;
 
-  text_offset = ANOFFSET (objfile->section_offsets, 0);
+  text_offset = ANOFFSET (objfile->section_offsets, SECT_OFF_TEXT (objfile));
   ui = (struct hppa_unwind_info *) obstack_alloc (&objfile->objfile_obstack,
 					   sizeof (struct hppa_unwind_info));
 
@@ -340,7 +338,7 @@ read_unwind_info (struct objfile *objfile)
   /* For reasons unknown the HP PA64 tools generate multiple unwinder
      sections in a single executable.  So we just iterate over every
      section in the BFD looking for unwinder sections intead of trying
-     to do a lookup with bfd_get_section_by_name. 
+     to do a lookup with bfd_get_section_by_name.
 
      First determine the total size of the unwind tables so that we
      can allocate memory in a nice big hunk.  */
@@ -418,7 +416,7 @@ read_unwind_info (struct objfile *objfile)
 	  /* Clear out the next unwind entry.  */
 	  memset (&ui->table[index], 0, sizeof (struct unwind_table_entry));
 
-	  /* Convert offset & size into region_start and region_end.  
+	  /* Convert offset & size into region_start and region_end.
 	     Stuff away the stub type into "reserved" fields.  */
 	  ui->table[index].region_start = bfd_get_32 (objfile->obfd,
 						      (bfd_byte *) buf);
@@ -464,7 +462,7 @@ find_unwind_entry (CORE_ADDR pc)
     fprintf_unfiltered (gdb_stdlog, "{ find_unwind_entry %s -> ",
 		        hex_string (pc));
 
-  /* A function at address 0?  Not in HP-UX! */
+  /* A function at address 0?  Not in HP-UX!  */
   if (pc == (CORE_ADDR) 0)
     {
       if (hppa_debug)
@@ -489,7 +487,7 @@ find_unwind_entry (CORE_ADDR pc)
         ui = ((struct hppa_objfile_private *) priv)->unwind_info;
       }
 
-    /* First, check the cache */
+    /* First, check the cache.  */
 
     if (ui->cache
 	&& pc >= ui->cache->region_start
@@ -501,7 +499,7 @@ find_unwind_entry (CORE_ADDR pc)
         return ui->cache;
       }
 
-    /* Not in the cache, do a binary search */
+    /* Not in the cache, do a binary search.  */
 
     first = 0;
     last = ui->last;
@@ -533,7 +531,7 @@ find_unwind_entry (CORE_ADDR pc)
 }
 
 /* The epilogue is defined here as the area either on the `bv' instruction 
-   itself or an instruction which destroys the function's stack frame. 
+   itself or an instruction which destroys the function's stack frame.
    
    We do not assume that the epilogue is at the end of a function as we can
    also have return sequences in the middle of a function.  */
@@ -543,8 +541,7 @@ hppa_in_function_epilogue_p (struct gdbarch *gdbarch, CORE_ADDR pc)
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   unsigned long status;
   unsigned int inst;
-  char buf[4];
-  int off;
+  gdb_byte buf[4];
 
   status = target_read_memory (pc, buf, 4);
   if (status != 0)
@@ -715,7 +712,7 @@ hppa32_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
   for (write_pass = 0; write_pass < 2; write_pass++)
     {
       CORE_ADDR struct_ptr = 0;
-      /* The first parameter goes into sp-36, each stack slot is 4-bytes.  
+      /* The first parameter goes into sp-36, each stack slot is 4-bytes.
          struct_ptr is adjusted for each argument below, so the first
 	 argument will end up at sp-36.  */
       CORE_ADDR param_ptr = 32;
@@ -728,7 +725,7 @@ hppa32_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
 	  struct type *type = check_typedef (value_type (arg));
 	  /* The corresponding parameter that is pushed onto the
 	     stack, and [possibly] passed in a register.  */
-	  char param_val[8];
+	  gdb_byte param_val[8];
 	  int param_len;
 	  memset (param_val, 0, sizeof param_val);
 	  if (TYPE_LENGTH (type) > 8)
@@ -829,7 +826,7 @@ hppa32_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
     }
 
   /* If a structure has to be returned, set up register 28 to hold its
-     address */
+     address.  */
   if (struct_return)
     regcache_cooked_write_unsigned (regcache, 28, struct_addr);
 
@@ -931,7 +928,7 @@ hppa64_convert_code_addr_to_fptr (struct gdbarch *gdbarch, CORE_ADDR code)
 	   addr += 2 * 8)
 	{
 	  ULONGEST opdaddr;
-	  char tmp[8];
+	  gdb_byte tmp[8];
 
 	  if (target_read_memory (addr, tmp, sizeof (tmp)))
 	      break;
@@ -1035,7 +1032,7 @@ hppa64_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
 	    {
 	      /* "Aggregates larger than 8 bytes are aligned on a
 		 16-byte boundary, possibly leaving an unused argument
-		 slot, which is filled with garbage. If necessary,
+		 slot, which is filled with garbage.  If necessary,
 		 they are padded on the right (with garbage), to a
 		 multiple of 8 bytes."  */
 	      offset = align_up (offset, 16);
@@ -1115,7 +1112,7 @@ hppa64_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
 /* Handle 32/64-bit struct return conventions.  */
 
 static enum return_value_convention
-hppa32_return_value (struct gdbarch *gdbarch, struct type *func_type,
+hppa32_return_value (struct gdbarch *gdbarch, struct value *function,
 		     struct type *type, struct regcache *regcache,
 		     gdb_byte *readbuf, const gdb_byte *writebuf)
 {
@@ -1155,7 +1152,7 @@ hppa32_return_value (struct gdbarch *gdbarch, struct type *func_type,
 }
 
 static enum return_value_convention
-hppa64_return_value (struct gdbarch *gdbarch, struct type *func_type,
+hppa64_return_value (struct gdbarch *gdbarch, struct value *function,
 		     struct type *type, struct regcache *regcache,
 		     gdb_byte *readbuf, const gdb_byte *writebuf)
 {
@@ -1306,7 +1303,7 @@ hppa_write_pc (struct regcache *regcache, CORE_ADDR pc)
 }
 
 /* For the given instruction (INST), return any adjustment it makes
-   to the stack pointer or zero for no adjustment. 
+   to the stack pointer or zero for no adjustment.
 
    This only handles instructions commonly found in prologues.  */
 
@@ -1398,7 +1395,7 @@ inst_saves_gr (unsigned long inst)
 	  && ((inst >> 6) & 0xf) == 0xb))
     return hppa_extract_5R_store (inst);
 
-  /* Does it look like a stwm?  GCC & HPC may use this in prologues. */
+  /* Does it look like a stwm?  GCC & HPC may use this in prologues.  */
   if ((inst >> 26) == 0x1b)
     return hppa_extract_5R_store (inst);
 
@@ -1424,12 +1421,12 @@ inst_saves_gr (unsigned long inst)
 static int
 inst_saves_fr (unsigned long inst)
 {
-  /* is this an FSTD ? */
+  /* Is this an FSTD?  */
   if ((inst & 0xfc00dfc0) == 0x2c001200)
     return hppa_extract_5r_store (inst);
   if ((inst & 0xfc000002) == 0x70000002)
     return hppa_extract_5R_store (inst);
-  /* is this an FSTW ? */
+  /* Is this an FSTW?  */
   if ((inst & 0xfc00df80) == 0x24001200)
     return hppa_extract_5r_store (inst);
   if ((inst & 0xfc000002) == 0x7c000000)
@@ -1438,7 +1435,7 @@ inst_saves_fr (unsigned long inst)
 }
 
 /* Advance PC across any function entry prologue instructions
-   to reach some "real" code. 
+   to reach some "real" code.
 
    Use information in the unwind table to determine what exactly should
    be in the prologue.  */
@@ -1449,7 +1446,7 @@ skip_prologue_hard_way (struct gdbarch *gdbarch, CORE_ADDR pc,
 			int stop_before_branch)
 {
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
-  char buf[4];
+  gdb_byte buf[4];
   CORE_ADDR orig_pc = pc;
   unsigned long inst, stack_remaining, save_gr, save_fr, save_rp, save_sp;
   unsigned long args_stored, status, i, restart_gr, restart_fr;
@@ -1464,7 +1461,7 @@ restart:
   if (!u)
     return pc;
 
-  /* If we are not at the beginning of a function, then return now. */
+  /* If we are not at the beginning of a function, then return now.  */
   if ((pc & ~0x3) != u->region_start)
     return pc;
 
@@ -1699,7 +1696,6 @@ after_prologue (CORE_ADDR pc)
 {
   struct symtab_and_line sal;
   CORE_ADDR func_addr, func_end;
-  struct symbol *f;
 
   /* If we can not find the symbol in the partial symbol table, then
      there is no hope we can determine the function's start address
@@ -1714,7 +1710,7 @@ after_prologue (CORE_ADDR pc)
      is within the function bounds.  In that case we return the end of the
      source line.  Second is the end of the source line extends beyond the
      bounds of the current function.  We need to use the slow code to
-     examine instructions in that case. 
+     examine instructions in that case.
 
      Anything else is simply a bug elsewhere.  Fixing it here is absolutely
      the wrong thing to do.  In fact, it should be entirely possible for this
@@ -1728,10 +1724,10 @@ after_prologue (CORE_ADDR pc)
 
 /* To skip prologues, I use this predicate.  Returns either PC itself
    if the code at PC does not look like a function prologue; otherwise
-   returns an address that (if we're lucky) follows the prologue.  
+   returns an address that (if we're lucky) follows the prologue.
    
    hppa_skip_prologue is called by gdb to place a breakpoint in a function.
-   It doesn't necessarily skips all the insns in the prologue. In fact
+   It doesn't necessarily skips all the insns in the prologue.  In fact
    we might not want to skip all the insns because a prologue insn may
    appear in the delay slot of the first branch, and we don't want to
    skip over the branch in that case.  */
@@ -1739,10 +1735,7 @@ after_prologue (CORE_ADDR pc)
 static CORE_ADDR
 hppa_skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc)
 {
-  unsigned long inst;
-  int offset;
   CORE_ADDR post_prologue_pc;
-  char buf[4];
 
   /* See if we can determine the end of the prologue via the symbol table.
      If so, then return either PC, or the PC after the prologue, whichever
@@ -1794,7 +1787,6 @@ hppa_frame_cache (struct frame_info *this_frame, void **this_cache)
   struct hppa_frame_cache *cache;
   long saved_gr_mask;
   long saved_fr_mask;
-  CORE_ADDR this_sp;
   long frame_size;
   struct unwind_table_entry *u;
   CORE_ADDR prologue_end;
@@ -1866,7 +1858,7 @@ hppa_frame_cache (struct frame_info *this_frame, void **this_cache)
        skip_prologue_using_sal, in case we stepped into a function without
        symbol information.  hppa_skip_prologue also bounds the returned
        pc by the passed in pc, so it will not return a pc in the next
-       function.  
+       function.
        
        We used to call hppa_skip_prologue to find the end of the prologue,
        but if some non-prologue instructions get scheduled into the prologue,
@@ -1877,9 +1869,9 @@ hppa_frame_cache (struct frame_info *this_frame, void **this_cache)
     /* We used to use get_frame_func to locate the beginning of the
        function to pass to skip_prologue.  However, when objects are
        compiled without debug symbols, get_frame_func can return the wrong
-       function (or 0).  We can do better than that by using unwind records.  
+       function (or 0).  We can do better than that by using unwind records.
        This only works if the Region_description of the unwind record
-       indicates that it includes the entry point of the function.  
+       indicates that it includes the entry point of the function.
        HP compilers sometimes generate unwind records for regions that
        do not include the entry or exit point of a function.  GNU tools
        do not do this.  */
@@ -1905,7 +1897,7 @@ hppa_frame_cache (struct frame_info *this_frame, void **this_cache)
 	 pc += 4)
       {
 	int reg;
-	char buf4[4];
+	gdb_byte buf4[4];
 	long inst;
 
 	if (!safe_frame_unwind_memory (this_frame, pc, buf4, sizeof buf4)) 
@@ -1971,7 +1963,8 @@ hppa_frame_cache (struct frame_info *this_frame, void **this_cache)
 		CORE_ADDR offset;
 		
 		if ((inst >> 26) == 0x1c)
-		  offset = (inst & 0x1 ? -1 << 13 : 0) | (((inst >> 4) & 0x3ff) << 3);
+		  offset = (inst & 0x1 ? -1 << 13 : 0)
+		    | (((inst >> 4) & 0x3ff) << 3);
 		else if ((inst >> 26) == 0x03)
 		  offset = hppa_low_hppa_sign_extend (inst & 0x1f, 5);
 		else
@@ -1981,7 +1974,8 @@ hppa_frame_cache (struct frame_info *this_frame, void **this_cache)
 		if (u->Save_SP)
 		  cache->saved_regs[reg].addr = offset;
 		else
-		  cache->saved_regs[reg].addr = (u->Total_frame_size << 3) + offset;
+		  cache->saved_regs[reg].addr
+		    = (u->Total_frame_size << 3) + offset;
 	      }
 	  }
 
@@ -2021,7 +2015,7 @@ hppa_frame_cache (struct frame_info *this_frame, void **this_cache)
 	      }
 	  }
 	
-	/* Quit if we hit any kind of branch the previous iteration. */
+	/* Quit if we hit any kind of branch the previous iteration.  */
 	if (final_iteration)
 	  break;
 	/* We want to look precisely one instruction beyond the branch
@@ -2206,7 +2200,8 @@ hppa_frame_prev_register (struct frame_info *this_frame,
 {
   struct hppa_frame_cache *info = hppa_frame_cache (this_frame, this_cache);
 
-  return hppa_frame_prev_register_helper (this_frame, info->saved_regs, regnum);
+  return hppa_frame_prev_register_helper (this_frame,
+					  info->saved_regs, regnum);
 }
 
 static int
@@ -2222,6 +2217,7 @@ hppa_frame_unwind_sniffer (const struct frame_unwind *self,
 static const struct frame_unwind hppa_frame_unwind =
 {
   NORMAL_FRAME,
+  default_frame_unwind_stop_reason,
   hppa_frame_this_id,
   hppa_frame_prev_register,
   NULL,
@@ -2322,15 +2318,17 @@ static struct value *
 hppa_fallback_frame_prev_register (struct frame_info *this_frame,
 			           void **this_cache, int regnum)
 {
-  struct hppa_frame_cache *info = 
-    hppa_fallback_frame_cache (this_frame, this_cache);
+  struct hppa_frame_cache *info
+    = hppa_fallback_frame_cache (this_frame, this_cache);
 
-  return hppa_frame_prev_register_helper (this_frame, info->saved_regs, regnum);
+  return hppa_frame_prev_register_helper (this_frame,
+					  info->saved_regs, regnum);
 }
 
 static const struct frame_unwind hppa_fallback_frame_unwind =
 {
   NORMAL_FRAME,
+  default_frame_unwind_stop_reason,
   hppa_fallback_frame_this_id,
   hppa_fallback_frame_prev_register,
   NULL,
@@ -2404,7 +2402,8 @@ hppa_stub_frame_prev_register (struct frame_info *this_frame,
   if (info == NULL)
     error (_("Requesting registers from null frame."));
 
-  return hppa_frame_prev_register_helper (this_frame, info->saved_regs, regnum);
+  return hppa_frame_prev_register_helper (this_frame,
+					  info->saved_regs, regnum);
 }
 
 static int
@@ -2418,7 +2417,7 @@ hppa_stub_unwind_sniffer (const struct frame_unwind *self,
 
   if (pc == 0
       || (tdep->in_solib_call_trampoline != NULL
-	  && tdep->in_solib_call_trampoline (gdbarch, pc, NULL))
+	  && tdep->in_solib_call_trampoline (gdbarch, pc))
       || gdbarch_in_solib_return_trampoline (gdbarch, pc, NULL))
     return 1;
   return 0;
@@ -2426,6 +2425,7 @@ hppa_stub_unwind_sniffer (const struct frame_unwind *self,
 
 static const struct frame_unwind hppa_stub_frame_unwind = {
   NORMAL_FRAME,
+  default_frame_unwind_stop_reason,
   hppa_stub_frame_this_id,
   hppa_stub_frame_prev_register,
   NULL,
@@ -2463,26 +2463,31 @@ hppa_unwind_pc (struct gdbarch *gdbarch, struct frame_info *next_frame)
 /* Return the minimal symbol whose name is NAME and stub type is STUB_TYPE.
    Return NULL if no such symbol was found.  */
 
-struct minimal_symbol *
+struct bound_minimal_symbol
 hppa_lookup_stub_minimal_symbol (const char *name,
                                  enum unwind_stub_types stub_type)
 {
   struct objfile *objfile;
   struct minimal_symbol *msym;
+  struct bound_minimal_symbol result = { NULL, NULL };
 
   ALL_MSYMBOLS (objfile, msym)
     {
-      if (strcmp (SYMBOL_LINKAGE_NAME (msym), name) == 0)
+      if (strcmp (MSYMBOL_LINKAGE_NAME (msym), name) == 0)
         {
           struct unwind_table_entry *u;
 
-          u = find_unwind_entry (SYMBOL_VALUE (msym));
+          u = find_unwind_entry (MSYMBOL_VALUE (msym));
           if (u != NULL && u->stub_unwind.stub_type == stub_type)
-            return msym;
+	    {
+	      result.objfile = objfile;
+	      result.minsym = msym;
+	      return result;
+	    }
         }
     }
 
-  return NULL;
+  return result;
 }
 
 static void
@@ -2506,7 +2511,7 @@ unwind_command (char *exp, int from_tty)
       return;
     }
 
-  printf_unfiltered ("unwind_table_entry (0x%lx):\n", (unsigned long)u);
+  printf_unfiltered ("unwind_table_entry (%s):\n", host_address_to_string (u));
 
   printf_unfiltered ("\tregion_start = %s\n", hex_string (u->region_start));
   gdb_flush (gdb_stdout);
@@ -2639,7 +2644,7 @@ hppa64_cannot_fetch_register (struct gdbarch *gdbarch, int regnum)
 }
 
 static CORE_ADDR
-hppa_smash_text_address (struct gdbarch *gdbarch, CORE_ADDR addr)
+hppa_addr_bits_remove (struct gdbarch *gdbarch, CORE_ADDR addr)
 {
   /* The low two bits of the PC on the PA contain the privilege level.
      Some genius implementing a (non-GCC) compiler apparently decided
@@ -2660,17 +2665,22 @@ hppa_fetch_pointer_argument (struct frame_info *frame, int argi,
   return get_frame_register_unsigned (frame, HPPA_R0_REGNUM + 26 - argi);
 }
 
-static void
+static enum register_status
 hppa_pseudo_register_read (struct gdbarch *gdbarch, struct regcache *regcache,
 			   int regnum, gdb_byte *buf)
 {
-    enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
-    ULONGEST tmp;
+  enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
+  ULONGEST tmp;
+  enum register_status status;
 
-    regcache_raw_read_unsigned (regcache, regnum, &tmp);
-    if (regnum == HPPA_PCOQ_HEAD_REGNUM || regnum == HPPA_PCOQ_TAIL_REGNUM)
-      tmp &= ~0x3;
-    store_unsigned_integer (buf, sizeof tmp, byte_order, tmp);
+  status = regcache_raw_read_unsigned (regcache, regnum, &tmp);
+  if (status == REG_VALID)
+    {
+      if (regnum == HPPA_PCOQ_HEAD_REGNUM || regnum == HPPA_PCOQ_TAIL_REGNUM)
+	tmp &= ~0x3;
+      store_unsigned_integer (buf, sizeof tmp, byte_order, tmp);
+    }
+  return status;
 }
 
 static CORE_ADDR
@@ -2770,18 +2780,6 @@ static struct insn_pattern hppa_plt_stub[] = {
   { 0, 0 }
 };
 
-static struct insn_pattern hppa_sigtramp[] = {
-  /* ldi 0, %r25 or ldi 1, %r25 */
-  { 0x34190000, 0xfffffffd },
-  /* ldi __NR_rt_sigreturn, %r20 */
-  { 0x3414015a, 0xffffffff },
-  /* be,l 0x100(%sr2, %r0), %sr0, %r31 */
-  { 0xe4008200, 0xffffffff },
-  /* nop */
-  { 0x08000240, 0xffffffff },
-  { 0, 0 }
-};
-
 /* Maximum number of instructions on the patterns above.  */
 #define HPPA_MAX_INSN_PATTERN_LEN	4
 
@@ -2850,13 +2848,12 @@ hppa_in_dyncall (CORE_ADDR pc)
 }
 
 int
-hppa_in_solib_call_trampoline (struct gdbarch *gdbarch,
-			       CORE_ADDR pc, char *name)
+hppa_in_solib_call_trampoline (struct gdbarch *gdbarch, CORE_ADDR pc)
 {
   unsigned int insn[HPPA_MAX_INSN_PATTERN_LEN];
   struct unwind_table_entry *u;
 
-  if (in_plt_section (pc, name) || hppa_in_dyncall (pc))
+  if (in_plt_section (pc) || hppa_in_dyncall (pc))
     return 1;
 
   /* The GNU toolchain produces linker stubs without unwind
@@ -2913,13 +2910,13 @@ hppa_skip_trampoline_code (struct frame_info *frame, CORE_ADDR pc)
       /* fallthrough */
     }
 
-  if (in_plt_section (pc, NULL))
+  if (in_plt_section (pc))
     {
       pc = read_memory_typed_address (pc, func_ptr_type);
 
       /* If the PLT slot has not yet been resolved, the target will be
          the PLT stub.  */
-      if (in_plt_section (pc, NULL))
+      if (in_plt_section (pc))
 	{
 	  /* Sanity check: are we pointing to the PLT stub?  */
   	  if (!hppa_match_insns (gdbarch, pc, hppa_plt_stub, insn))
@@ -2993,7 +2990,7 @@ hppa_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
     return (arches->gdbarch);
 
   /* If none found, then allocate and initialize one.  */
-  tdep = XZALLOC (struct gdbarch_tdep);
+  tdep = XCNEW (struct gdbarch_tdep);
   gdbarch = gdbarch_alloc (&info, tdep);
 
   /* Determine from the bfd_arch_info structure if we are dealing with
@@ -3052,8 +3049,7 @@ hppa_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   set_gdbarch_inner_than (gdbarch, core_addr_greaterthan);
   set_gdbarch_sp_regnum (gdbarch, HPPA_SP_REGNUM);
   set_gdbarch_fp0_regnum (gdbarch, HPPA_FP0_REGNUM);
-  set_gdbarch_addr_bits_remove (gdbarch, hppa_smash_text_address);
-  set_gdbarch_smash_text_address (gdbarch, hppa_smash_text_address);
+  set_gdbarch_addr_bits_remove (gdbarch, hppa_addr_bits_remove);
   set_gdbarch_believe_pcc_promotion (gdbarch, 1);
   set_gdbarch_read_pc (gdbarch, hppa_read_pc);
   set_gdbarch_write_pc (gdbarch, hppa_write_pc);
@@ -3143,7 +3139,7 @@ _initialize_hppa_tdep (void)
 	   _("Print unwind table entry at given address."),
 	   &maintenanceprintlist);
 
-  /* Debug this files internals. */
+  /* Debug this files internals.  */
   add_setshow_boolean_cmd ("hppa", class_maintenance, &hppa_debug, _("\
 Set whether hppa target specific debugging information should be displayed."),
 			   _("\

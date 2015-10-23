@@ -1,7 +1,6 @@
 /* Native-dependent code for Solaris SPARC.
 
-   Copyright (C) 2003, 2004, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2003-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -59,8 +58,8 @@
 #define sparc_collect_gregset sparc64_collect_gregset
 #define sparc_collect_fpregset sparc64_collect_fpregset
 
-#define sparc_sol2_gregset sparc64_sol2_gregset
-#define sparc_sol2_fpregset sparc64_sol2_fpregset
+#define sparc_sol2_gregmap sparc64_sol2_gregmap
+#define sparc_sol2_fpregmap sparc64_sol2_fpregmap
 
 #else
 
@@ -69,33 +68,34 @@
 #define sparc_collect_gregset sparc32_collect_gregset
 #define sparc_collect_fpregset sparc32_collect_fpregset
 
-#define sparc_sol2_gregset sparc32_sol2_gregset
-#define sparc_sol2_fpregset sparc32_sol2_fpregset
+#define sparc_sol2_gregmap sparc32_sol2_gregmap
+#define sparc_sol2_fpregmap sparc32_sol2_fpregmap
 
 #endif
 
 void
 supply_gregset (struct regcache *regcache, const prgregset_t *gregs)
 {
-  sparc_supply_gregset (&sparc_sol2_gregset, regcache, -1, gregs);
+  sparc_supply_gregset (&sparc_sol2_gregmap, regcache, -1, gregs);
 }
 
 void
 supply_fpregset (struct regcache *regcache, const prfpregset_t *fpregs)
 {
-  sparc_supply_fpregset (regcache, -1, fpregs);
+  sparc_supply_fpregset (&sparc_sol2_fpregmap, regcache, -1, fpregs);
 }
 
 void
 fill_gregset (const struct regcache *regcache, prgregset_t *gregs, int regnum)
 {
-  sparc_collect_gregset (&sparc_sol2_gregset, regcache, regnum, gregs);
+  sparc_collect_gregset (&sparc_sol2_gregmap, regcache, regnum, gregs);
 }
 
 void
-fill_fpregset (const struct regcache *regcache, prfpregset_t *fpregs, int regnum)
+fill_fpregset (const struct regcache *regcache,
+	       prfpregset_t *fpregs, int regnum)
 {
-  sparc_collect_fpregset (regcache, regnum, fpregs);
+  sparc_collect_fpregset (&sparc_sol2_fpregmap, regcache, regnum, fpregs);
 }
 
 /* Provide a prototype to silence -Wmissing-prototypes.  */
@@ -107,7 +107,7 @@ _initialize_sparc_sol2_nat (void)
   struct target_ops *t;
 
   t = procfs_target ();
-#ifdef NEW_PROC_API	/* Solaris 6 and above can do HW watchpoints */
+#ifdef NEW_PROC_API	/* Solaris 6 and above can do HW watchpoints.  */
   procfs_use_watchpoints (t);
 #endif
   add_target (t);

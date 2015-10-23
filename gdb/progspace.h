@@ -1,6 +1,6 @@
 /* Program and address space management, for GDB, the GNU debugger.
 
-   Copyright (C) 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2009-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -23,6 +23,8 @@
 
 #include "target.h"
 #include "vec.h"
+#include "gdb_vecs.h"
+#include "registry.h"
 
 struct target_ops;
 struct bfd;
@@ -31,6 +33,10 @@ struct inferior;
 struct exec;
 struct address_space;
 struct program_space_data;
+struct address_space_data;
+
+typedef struct so_list *so_list_ptr;
+DEF_VEC_P (so_list_ptr);
 
 /* A program space represents a symbolic view of an address space.
    Roughly speaking, it holds all the data associated with a
@@ -143,6 +149,10 @@ struct program_space
     bfd *ebfd;
     /* The last-modified time, from when the exec was brought in.  */
     long ebfd_mtime;
+    /* Similar to bfd_get_filename (exec_bfd) but in original form given
+       by user, without symbolic links and pathname resolved.
+       It needs to be freed by xfree.  It is not NULL iff EBFD is not NULL.  */
+    char *pspace_exec_filename;
 
     /* The address space attached to this program space.  More than one
        program space may be bound to the same address space.  In the
@@ -174,7 +184,7 @@ struct program_space
     struct objfile *symfile_object_file;
 
     /* All known objfiles are kept in a linked list.  This points to
-       the head of this list. */
+       the head of this list.  */
     struct objfile *objfiles;
 
     /* The set of target sections matching the sections mapped into
@@ -185,9 +195,19 @@ struct program_space
        solib.c.  */
     struct so_list *so_list;
 
+    /* Number of calls to solib_add.  */
+    unsigned solib_add_generation;
+
+    /* When an solib is added, it is also added to this vector.  This
+       is so we can properly report solib changes to the user.  */
+    VEC (so_list_ptr) *added_solibs;
+
+    /* When an solib is removed, its name is added to this vector.
+       This is so we can properly report solib changes to the user.  */
+    VEC (char_ptr) *deleted_solibs;
+
     /* Per pspace data-pointers required by other GDB modules.  */
-    void **data;
-    unsigned num_data;
+    REGISTRY_FIELDS;
   };
 
 /* The object file that the main symbol table was loaded from (e.g. the
@@ -196,7 +216,7 @@ struct program_space
 #define symfile_objfile current_program_space->symfile_object_file
 
 /* All known objfiles are kept in a linked list.  This points to the
-   root of this list. */
+   root of this list.  */
 #define object_files current_program_space->objfiles
 
 /* The set of target sections matching the sections mapped into the
@@ -215,9 +235,6 @@ extern struct program_space *current_program_space;
 /* Add a new empty program space, and assign ASPACE to it.  Returns the
    pointer to the new object.  */
 extern struct program_space *add_program_space (struct address_space *aspace);
-
-/* Release PSPACE and removes it from the pspace list.  */
-extern void remove_program_space (struct program_space *pspace);
 
 /* Returns the number of program spaces listed.  */
 extern int number_of_program_spaces (void);
@@ -275,16 +292,19 @@ extern void update_address_spaces (void);
    anymore.  */
 extern void prune_program_spaces (void);
 
+/* Reset saved solib data at the start of an solib event.  This lets
+   us properly collect the data when calling solib_add, so it can then
+   later be printed.  */
+extern void clear_program_space_solib_cache (struct program_space *);
+
 /* Keep a registry of per-pspace data-pointers required by other GDB
    modules.  */
 
-extern const struct program_space_data *register_program_space_data (void);
-extern const struct program_space_data *register_program_space_data_with_cleanup
-  (void (*cleanup) (struct program_space *, void *));
-extern void clear_program_space_data (struct program_space *pspace);
-extern void set_program_space_data (struct program_space *pspace,
-			      const struct program_space_data *data, void *value);
-extern void *program_space_data (struct program_space *pspace,
-			   const struct program_space_data *data);
+DECLARE_REGISTRY (program_space);
+
+/* Keep a registry of per-aspace data-pointers required by other GDB
+   modules.  */
+
+DECLARE_REGISTRY (address_space);
 
 #endif

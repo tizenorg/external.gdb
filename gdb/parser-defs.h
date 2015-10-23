@@ -1,8 +1,6 @@
 /* Parser definitions for GDB.
 
-   Copyright (C) 1986, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997,
-   1998, 1999, 2000, 2002, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 1986-2014 Free Software Foundation, Inc.
 
    Modified from expread.y by the Department of Computer Science at the
    State University of New York at Buffalo.
@@ -26,22 +24,38 @@
 #define PARSER_DEFS_H 1
 
 #include "doublest.h"
+#include "vec.h"
+#include "expression.h"
 
 struct block;
+struct language_defn;
+struct internalvar;
 
 extern int parser_debug;
 
-extern struct expression *expout;
-extern int expout_size;
-extern int expout_ptr;
+#define parse_gdbarch(ps) ((ps)->expout->gdbarch)
+#define parse_language(ps) ((ps)->expout->language_defn)
 
-#define parse_gdbarch (expout->gdbarch)
-#define parse_language (expout->language_defn)
+struct parser_state
+{
+  /* The expression related to this parser state.  */
+
+  struct expression *expout;
+
+  /* The size of the expression above.  */
+
+  size_t expout_size;
+
+  /* The number of elements already in the expression.  This is used
+     to know where to put new elements.  */
+
+  size_t expout_ptr;
+};
 
 /* If this is nonzero, this block is used as the lexical context
    for symbol names.  */
 
-extern struct block *expression_context_block;
+extern const struct block *expression_context_block;
 
 /* If expression_context_block is non-zero, then this is the PC within
    the block that we want to evaluate expressions at.  When debugging
@@ -50,25 +64,25 @@ extern struct block *expression_context_block;
 extern CORE_ADDR expression_context_pc;
 
 /* The innermost context required by the stack and register variables
-   we've encountered so far. */
-extern struct block *innermost_block;
+   we've encountered so far.  */
+extern const struct block *innermost_block;
 
 /* The block in which the most recently discovered symbol was found.
    FIXME: Should be declared along with lookup_symbol in symtab.h; is not
    related specifically to parsing.  */
-extern struct block *block_found;
+extern const struct block *block_found;
 
 /* Number of arguments seen so far in innermost function call.  */
 extern int arglist_len;
 
 /* A string token, either a char-string or bit-string.  Char-strings are
-   used, for example, for the names of symbols. */
+   used, for example, for the names of symbols.  */
 
 struct stoken
   {
-    /* Pointer to first byte of char-string or first bit of bit-string */
-    char *ptr;
-    /* Length of string in bytes for char-string or bits for bit-string */
+    /* Pointer to first byte of char-string or first bit of bit-string.  */
+    const char *ptr;
+    /* Length of string in bytes for char-string or bits for bit-string.  */
     int length;
   };
 
@@ -76,9 +90,9 @@ struct typed_stoken
   {
     /* A language-specific type field.  */
     int type;
-    /* Pointer to first byte of char-string or first bit of bit-string */
+    /* Pointer to first byte of char-string or first bit of bit-string.  */
     char *ptr;
-    /* Length of string in bytes for char-string or bits for bit-string */
+    /* Length of string in bytes for char-string or bits for bit-string.  */
     int length;
   };
 
@@ -108,6 +122,8 @@ struct objc_class_str
     int class;
   };
 
+typedef struct type *type_ptr;
+DEF_VEC_P (type_ptr);
 
 /* For parsing of complicated types.
    An array should be preceded in the list by the size of the array.  */
@@ -117,53 +133,94 @@ enum type_pieces
     tp_pointer, 
     tp_reference, 
     tp_array, 
-    tp_function, 
+    tp_function,
+    tp_function_with_arguments,
     tp_const, 
     tp_volatile, 
-    tp_space_identifier
+    tp_space_identifier,
+    tp_type_stack
   };
 /* The stack can contain either an enum type_pieces or an int.  */
 union type_stack_elt
   {
     enum type_pieces piece;
     int int_val;
+    struct type_stack *stack_val;
+    VEC (type_ptr) *typelist_val;
   };
-extern union type_stack_elt *type_stack;
-extern int type_stack_depth, type_stack_size;
 
-extern void write_exp_elt (union exp_element);
+/* The type stack is an instance of this structure.  */
 
-extern void write_exp_elt_opcode (enum exp_opcode);
+struct type_stack
+{
+  /* Elements on the stack.  */
+  union type_stack_elt *elements;
+  /* Current stack depth.  */
+  int depth;
+  /* Allocated size of stack.  */
+  int size;
+};
 
-extern void write_exp_elt_sym (struct symbol *);
+/* Helper function to initialize the expout, expout_size, expout_ptr
+   trio inside PS before it is used to store expression elements created
+   during the parsing of an expression.  INITIAL_SIZE is the initial size of
+   the expout array.  LANG is the language used to parse the expression.
+   And GDBARCH is the gdbarch to use during parsing.  */
 
-extern void write_exp_elt_longcst (LONGEST);
+extern void initialize_expout (struct parser_state *ps,
+			       size_t initial_size,
+			       const struct language_defn *lang,
+			       struct gdbarch *gdbarch);
 
-extern void write_exp_elt_dblcst (DOUBLEST);
+/* Helper function that reallocates the EXPOUT inside PS in order to
+   eliminate any unused space.  It is generally used when the expression
+   has just been parsed and created.  */
 
-extern void write_exp_elt_decfloatcst (gdb_byte *);
+extern void reallocate_expout (struct parser_state *ps);
 
-extern void write_exp_elt_type (struct type *);
+/* Reverse an expression from suffix form (in which it is constructed)
+   to prefix form (in which we can conveniently print or execute it).
+   Ordinarily this always returns -1.  However, if EXPOUT_LAST_STRUCT
+   is not -1 (i.e., we are trying to complete a field name), it will
+   return the index of the subexpression which is the left-hand-side
+   of the struct operation at EXPOUT_LAST_STRUCT.  */
 
-extern void write_exp_elt_intern (struct internalvar *);
+extern int prefixify_expression (struct expression *expr);
 
-extern void write_exp_string (struct stoken);
+extern void write_exp_elt_opcode (struct parser_state *, enum exp_opcode);
 
-void write_exp_string_vector (int type, struct stoken_vector *vec);
+extern void write_exp_elt_sym (struct parser_state *, struct symbol *);
 
-extern void write_exp_bitstring (struct stoken);
+extern void write_exp_elt_longcst (struct parser_state *, LONGEST);
 
-extern void write_exp_elt_block (struct block *);
+extern void write_exp_elt_dblcst (struct parser_state *, DOUBLEST);
 
-extern void write_exp_elt_objfile (struct objfile *objfile);
+extern void write_exp_elt_decfloatcst (struct parser_state *, gdb_byte *);
 
-extern void write_exp_msymbol (struct minimal_symbol *);
+extern void write_exp_elt_type (struct parser_state *, struct type *);
 
-extern void write_dollar_variable (struct stoken str);
+extern void write_exp_elt_intern (struct parser_state *, struct internalvar *);
 
-extern void mark_struct_expression (void);
+extern void write_exp_string (struct parser_state *, struct stoken);
 
-extern char *find_template_name_end (char *);
+void write_exp_string_vector (struct parser_state *, int type,
+			      struct stoken_vector *vec);
+
+extern void write_exp_bitstring (struct parser_state *, struct stoken);
+
+extern void write_exp_elt_block (struct parser_state *, const struct block *);
+
+extern void write_exp_elt_objfile (struct parser_state *,
+				   struct objfile *objfile);
+
+extern void write_exp_msymbol (struct parser_state *,
+			       struct bound_minimal_symbol);
+
+extern void write_dollar_variable (struct parser_state *, struct stoken str);
+
+extern void mark_struct_expression (struct parser_state *);
+
+extern const char *find_template_name_end (const char *);
 
 extern void start_arglist (void);
 
@@ -171,15 +228,28 @@ extern int end_arglist (void);
 
 extern char *copy_name (struct stoken);
 
+extern void insert_type (enum type_pieces);
+
 extern void push_type (enum type_pieces);
 
 extern void push_type_int (int);
 
-extern void push_type_address_space (char *);
+extern void insert_type_address_space (struct parser_state *, char *);
 
 extern enum type_pieces pop_type (void);
 
 extern int pop_type_int (void);
+
+extern struct type_stack *get_type_stack (void);
+
+extern struct type_stack *append_type_stack (struct type_stack *to,
+					     struct type_stack *from);
+
+extern void push_type_stack (struct type_stack *stack);
+
+extern void type_stack_cleanup (void *arg);
+
+extern void push_typelist (VEC (type_ptr) *typelist);
 
 extern int length_of_subexp (struct expression *, int);
 
@@ -204,25 +274,20 @@ extern struct type *follow_types (struct type *);
 
 extern void null_post_parser (struct expression **, int);
 
+extern int parse_float (const char *p, int len, DOUBLEST *d,
+			const char **suffix);
+
+extern int parse_c_float (struct gdbarch *gdbarch, const char *p, int len,
+			  DOUBLEST *d, struct type **t);
+
 /* During parsing of a C expression, the pointer to the next character
    is in this variable.  */
 
-extern char *lexptr;
+extern const char *lexptr;
 
-/* After a token has been recognized, this variable points to it.  
+/* After a token has been recognized, this variable points to it.
    Currently used only for error reporting.  */
-extern char *prev_lexptr;
-
-/* Tokens that refer to names do so with explicit pointer and length,
-   so they can share the storage that lexptr is parsing.
-
-   When it is necessary to pass a name to a function that expects
-   a null-terminated string, the substring is copied out
-   into a block of storage that namecopy points to.
-
-   namecopy is allocated once, guaranteed big enough, for each parsing.  */
-
-extern char *namecopy;
+extern const char *prev_lexptr;
 
 /* Current depth in parentheses within the expression.  */
 
@@ -259,7 +324,7 @@ struct op_print
     enum precedence precedence;
 
     /* For a binary operator:  1 iff right associate.
-       For a unary operator:  1 iff postfix. */
+       For a unary operator:  1 iff postfix.  */
     int right_assoc;
   };
 
@@ -289,7 +354,10 @@ struct exp_descriptor
 						void *data),
 			   void *data);
 
-    /* Name of this operator for dumping purposes.  */
+    /* Name of this operator for dumping purposes.
+       The returned value should never be NULL, even if EXP_OPCODE is
+       an unknown opcode (a string containing an image of the numeric
+       value of the opcode can be returned, for instance).  */
     char *(*op_name) (enum exp_opcode);
 
     /* Dump the rest of this (prefix) expression after the operator
@@ -323,4 +391,14 @@ extern void parser_fprintf (FILE *, const char *, ...) ATTRIBUTE_PRINTF (2, 3);
 
 extern int exp_uses_objfile (struct expression *exp, struct objfile *objfile);
 
+extern void mark_completion_tag (enum type_code, const char *ptr,
+				 int length);
+
+/* Reallocate the `expout' pointer inside PS so that it can accommodate
+   at least LENELT expression elements.  This function does nothing if
+   there is enough room for the elements.  */
+
+extern void increase_expout_size (struct parser_state *ps, size_t lenelt);
+
 #endif /* PARSER_DEFS_H */
+

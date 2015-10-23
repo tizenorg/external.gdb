@@ -1,5 +1,5 @@
 /* Internal interfaces for the Win32 specific target code for gdbserver.
-   Copyright (C) 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2007-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -17,6 +17,12 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 #include <windows.h>
+
+struct target_desc;
+
+/* The inferior's target description.  This is a global because the
+   Windows ports support neither bi-arch nor multi-process.  */
+extern const struct target_desc *win32_tdesc;
 
 /* Thread information structure used to track extra information about
    each thread.  */
@@ -55,10 +61,12 @@ struct win32_target_ops
   void (*initial_stuff) (void);
 
   /* Fetch the context from the inferior.  */
-  void (*get_thread_context) (win32_thread_info *th, DEBUG_EVENT *current_event);
+  void (*get_thread_context) (win32_thread_info *th,
+			      DEBUG_EVENT *current_event);
 
   /* Flush the context back to the inferior.  */
-  void (*set_thread_context) (win32_thread_info *th, DEBUG_EVENT *current_event);
+  void (*set_thread_context) (win32_thread_info *th,
+			      DEBUG_EVENT *current_event);
 
   /* Called when a thread was added.  */
   void (*thread_added) (win32_thread_info *th);
@@ -77,8 +85,11 @@ struct win32_target_ops
   int breakpoint_len;
 
   /* Breakpoint/Watchpoint related functions.  See target.h for comments.  */
-  int (*insert_point) (char type, CORE_ADDR addr, int len);
-  int (*remove_point) (char type, CORE_ADDR addr, int len);
+  int (*supports_z_point_type) (char z_type);
+  int (*insert_point) (enum raw_bkpt_type type, CORE_ADDR addr,
+		       int size, struct raw_breakpoint *bp);
+  int (*remove_point) (enum raw_bkpt_type type, CORE_ADDR addr,
+		       int size, struct raw_breakpoint *bp);
   int (*stopped_by_watchpoint) (void);
   CORE_ADDR (*stopped_data_address) (void);
 };

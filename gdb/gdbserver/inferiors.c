@@ -1,6 +1,5 @@
 /* Inferior process information for the remote server for GDB.
-   Copyright (C) 2002, 2005, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2002-2014 Free Software Foundation, Inc.
 
    Contributed by MontaVista Software.
 
@@ -22,91 +21,15 @@
 #include <stdlib.h>
 
 #include "server.h"
+#include "gdbthread.h"
+#include "dll.h"
 
 struct inferior_list all_processes;
 struct inferior_list all_threads;
-struct inferior_list all_dlls;
-int dlls_changed;
 
 struct thread_info *current_inferior;
 
-
-/* Oft used ptids */
-ptid_t null_ptid;
-ptid_t minus_one_ptid;
-
-/* Create a ptid given the necessary PID, LWP, and TID components.  */
-
-ptid_t
-ptid_build (int pid, long lwp, long tid)
-{
-  ptid_t ptid;
-
-  ptid.pid = pid;
-  ptid.lwp = lwp;
-  ptid.tid = tid;
-  return ptid;
-}
-
-/* Create a ptid from just a pid.  */
-
-ptid_t
-pid_to_ptid (int pid)
-{
-  return ptid_build (pid, 0, 0);
-}
-
-/* Fetch the pid (process id) component from a ptid.  */
-
-int
-ptid_get_pid (ptid_t ptid)
-{
-  return ptid.pid;
-}
-
-/* Fetch the lwp (lightweight process) component from a ptid.  */
-
-long
-ptid_get_lwp (ptid_t ptid)
-{
-  return ptid.lwp;
-}
-
-/* Fetch the tid (thread id) component from a ptid.  */
-
-long
-ptid_get_tid (ptid_t ptid)
-{
-  return ptid.tid;
-}
-
-/* ptid_equal() is used to test equality of two ptids.  */
-
-int
-ptid_equal (ptid_t ptid1, ptid_t ptid2)
-{
-  return (ptid1.pid == ptid2.pid
-	  && ptid1.lwp == ptid2.lwp
-	  && ptid1.tid == ptid2.tid);
-}
-
-/* Return true if this ptid represents a process.  */
-
-int
-ptid_is_pid (ptid_t ptid)
-{
-  if (ptid_equal (minus_one_ptid, ptid))
-    return 0;
-  if (ptid_equal (null_ptid, ptid))
-    return 0;
-
-  return (ptid_get_pid (ptid) != 0
-	  && ptid_get_lwp (ptid) == 0
-	  && ptid_get_tid (ptid) == 0);
-}
-
 #define get_thread(inf) ((struct thread_info *)(inf))
-#define get_dll(inf) ((struct dll_info *)(inf))
 
 void
 add_inferior_to_list (struct inferior_list *list,
@@ -132,6 +55,24 @@ for_each_inferior (struct inferior_list *list,
     {
       next = cur->next;
       (*action) (cur);
+      cur = next;
+    }
+}
+
+/* Invoke ACTION for each inferior in LIST, passing DATA to ACTION.  */
+
+void
+for_each_inferior_with_data (struct inferior_list *list,
+			     void (*action) (struct inferior_list_entry *,
+					     void *),
+			     void *data)
+{
+  struct inferior_list_entry *cur = list->head, *next;
+
+  while (cur != NULL)
+    {
+      next = cur->next;
+      (*action) (cur, data);
       cur = next;
     }
 }
@@ -163,7 +104,7 @@ remove_inferior (struct inferior_list *list,
     list->tail = *cur;
 }
 
-void
+struct thread_info *
 add_thread (ptid_t thread_id, void *target_data)
 {
   struct thread_info *new_thread = xmalloc (sizeof (*new_thread));
@@ -174,28 +115,14 @@ add_thread (ptid_t thread_id, void *target_data)
   new_thread->last_resume_kind = resume_continue;
   new_thread->last_status.kind = TARGET_WAITKIND_IGNORE;
 
-  add_inferior_to_list (&all_threads, & new_thread->entry);
+  add_inferior_to_list (&all_threads, &new_thread->entry);
 
   if (current_inferior == NULL)
     current_inferior = new_thread;
 
   new_thread->target_data = target_data;
-  set_inferior_regcache_data (new_thread, new_register_cache ());
-}
 
-ptid_t
-thread_id_to_gdb_id (ptid_t thread_id)
-{
-  struct inferior_list_entry *inf = all_threads.head;
-
-  while (inf != NULL)
-    {
-      if (ptid_equal (inf->id, thread_id))
-	return thread_id;
-      inf = inf->next;
-    }
-
-  return null_ptid;
+  return new_thread;
 }
 
 ptid_t
@@ -204,20 +131,18 @@ thread_to_gdb_id (struct thread_info *thread)
   return thread->entry.id;
 }
 
+/* Wrapper around get_first_inferior to return a struct thread_info *.  */
+
+struct thread_info *
+get_first_thread (void)
+{
+  return (struct thread_info *) get_first_inferior (&all_threads);
+}
+
 struct thread_info *
 find_thread_ptid (ptid_t ptid)
 {
-  struct inferior_list_entry *inf = all_threads.head;
-
-  while (inf != NULL)
-    {
-      struct thread_info *thread = get_thread (inf);
-      if (ptid_equal (thread->entry.id, ptid))
-	return thread;
-      inf = inf->next;
-    }
-
-  return NULL;
+  return (struct thread_info *) find_inferior_id (&all_threads, ptid);
 }
 
 ptid_t
@@ -239,8 +164,23 @@ free_one_thread (struct inferior_list_entry *inf)
 void
 remove_thread (struct thread_info *thread)
 {
+  if (thread->btrace != NULL)
+    target_disable_btrace (thread->btrace);
+
   remove_inferior (&all_threads, (struct inferior_list_entry *) thread);
   free_one_thread (&thread->entry);
+}
+
+/* Return a pointer to the first inferior in LIST, or NULL if there isn't one.
+   This is for cases where the caller needs a thread, but doesn't care
+   which one.  */
+
+struct inferior_list_entry *
+get_first_inferior (struct inferior_list *list)
+{
+  if (list->head != NULL)
+    return list->head;
+  return NULL;
 }
 
 /* Find the first inferior_list_entry E in LIST for which FUNC (E, ARG)
@@ -304,128 +244,32 @@ set_inferior_regcache_data (struct thread_info *inferior, void *data)
   inferior->regcache_data = data;
 }
 
-static void
-free_one_dll (struct inferior_list_entry *inf)
+/* Return true if LIST has exactly one entry.  */
+
+int
+one_inferior_p (struct inferior_list *list)
 {
-  struct dll_info *dll = get_dll (inf);
-  if (dll->name != NULL)
-    free (dll->name);
-  free (dll);
+  return list->head != NULL && list->head == list->tail;
 }
 
-/* Find a DLL with the same name and/or base address.  A NULL name in
-   the key is ignored; so is an all-ones base address.  */
-
-static int
-match_dll (struct inferior_list_entry *inf, void *arg)
-{
-  struct dll_info *iter = (void *) inf;
-  struct dll_info *key = arg;
-
-  if (key->base_addr != ~(CORE_ADDR) 0
-      && iter->base_addr == key->base_addr)
-    return 1;
-  else if (key->name != NULL
-	   && iter->name != NULL
-	   && strcmp (key->name, iter->name) == 0)
-    return 1;
-
-  return 0;
-}
-
-/* Record a newly loaded DLL at BASE_ADDR.  */
+/* Reset head,tail of LIST, assuming all entries have already been freed.  */
 
 void
-loaded_dll (const char *name, CORE_ADDR base_addr)
+clear_inferior_list (struct inferior_list *list)
 {
-  struct dll_info *new_dll = xmalloc (sizeof (*new_dll));
-  memset (new_dll, 0, sizeof (*new_dll));
-
-  new_dll->entry.id = minus_one_ptid;
-
-  new_dll->name = xstrdup (name);
-  new_dll->base_addr = base_addr;
-
-  add_inferior_to_list (&all_dlls, &new_dll->entry);
-  dlls_changed = 1;
+  list->head = NULL;
+  list->tail = NULL;
 }
-
-/* Record that the DLL with NAME and BASE_ADDR has been unloaded.  */
-
-void
-unloaded_dll (const char *name, CORE_ADDR base_addr)
-{
-  struct dll_info *dll;
-  struct dll_info key_dll;
-
-  /* Be careful not to put the key DLL in any list.  */
-  key_dll.name = (char *) name;
-  key_dll.base_addr = base_addr;
-
-  dll = (void *) find_inferior (&all_dlls, match_dll, &key_dll);
-
-  if (dll == NULL)
-    /* For some inferiors we might get unloaded_dll events without having
-       a corresponding loaded_dll.  In that case, the dll cannot be found
-       in ALL_DLL, and there is nothing further for us to do.
-
-       This has been observed when running 32bit executables on Windows64
-       (i.e. through WOW64, the interface between the 32bits and 64bits
-       worlds).  In that case, the inferior always does some strange
-       unloading of unnamed dll.  */
-    return;
-  else
-    {
-      /* DLL has been found so remove the entry and free associated
-         resources.  */
-      remove_inferior (&all_dlls, &dll->entry);
-      free_one_dll (&dll->entry);
-      dlls_changed = 1;
-    }
-}
-
-#define clear_list(LIST) \
-  do { (LIST)->head = (LIST)->tail = NULL; } while (0)
 
 void
 clear_inferiors (void)
 {
   for_each_inferior (&all_threads, free_one_thread);
-  for_each_inferior (&all_dlls, free_one_dll);
+  clear_inferior_list (&all_threads);
 
-  clear_list (&all_threads);
-  clear_list (&all_dlls);
+  clear_dlls ();
 
   current_inferior = NULL;
-}
-
-/* Two utility functions for a truly degenerate inferior_list: a simple
-   PID listing.  */
-
-void
-add_pid_to_list (struct inferior_list *list, unsigned long pid)
-{
-  struct inferior_list_entry *new_entry;
-
-  new_entry = xmalloc (sizeof (struct inferior_list_entry));
-  new_entry->id = pid_to_ptid (pid);
-  add_inferior_to_list (list, new_entry);
-}
-
-int
-pull_pid_from_list (struct inferior_list *list, unsigned long pid)
-{
-  struct inferior_list_entry *new_entry;
-
-  new_entry = find_inferior_id (list, pid_to_ptid (pid));
-  if (new_entry == NULL)
-    return 0;
-  else
-    {
-      remove_inferior (list, new_entry);
-      free (new_entry);
-      return 1;
-    }
 }
 
 struct process_info *
@@ -435,10 +279,10 @@ add_process (int pid, int attached)
 
   process = xcalloc (1, sizeof (*process));
 
-  process->head.id = pid_to_ptid (pid);
+  process->entry.id = pid_to_ptid (pid);
   process->attached = attached;
 
-  add_inferior_to_list (&all_processes, &process->head);
+  add_inferior_to_list (&all_processes, &process->entry);
 
   return process;
 }
@@ -452,7 +296,7 @@ remove_process (struct process_info *process)
 {
   clear_symbol_cache (&process->symbol_cache);
   free_all_breakpoints (process);
-  remove_inferior (&all_processes, &process->head);
+  remove_inferior (&all_processes, &process->entry);
   free (process);
 }
 
@@ -517,11 +361,4 @@ current_process (void)
     fatal ("Current inferior requested, but current_inferior is NULL\n");
 
   return get_thread_process (current_inferior);
-}
-
-void
-initialize_inferiors (void)
-{
-  null_ptid = ptid_build (0, 0, 0);
-  minus_one_ptid = ptid_build (-1, 0, 0);
 }

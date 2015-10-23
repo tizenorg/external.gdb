@@ -1,7 +1,6 @@
 /* Simulator pseudo baseclass.
 
-   Copyright 1997, 1998, 2003, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright 1997-2014 Free Software Foundation, Inc.
 
    Contributed by Cygnus Support.
 
@@ -34,7 +33,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
          CIA_ADDR to return the integral value.  *-/
      /-* #define CIA_ADDR(cia) (...) *-/
      #include "sim-base.h"
-   
+
    finally, two data types `struct _sim_cpu' and `struct sim_state'
    are defined:
 
@@ -245,7 +244,7 @@ typedef struct {
 } sim_state_base;
 
 /* Functions for allocating/freeing a sim_state.  */
-SIM_DESC sim_state_alloc PARAMS ((SIM_OPEN_KIND kind, host_callback *callback));
-void sim_state_free PARAMS ((SIM_DESC));
+SIM_DESC sim_state_alloc (SIM_OPEN_KIND kind, host_callback *callback);
+void sim_state_free (SIM_DESC);
 
 #endif /* SIM_BASE_H */

@@ -1,6 +1,6 @@
 /* gdb.c --- sim interface to GDB.
 
-Copyright (C) 2005, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+Copyright (C) 2005-2014 Free Software Foundation, Inc.
 Contributed by Red Hat, Inc.
 
 This file is part of the GNU simulators.
@@ -18,7 +18,7 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-
+#include "config.h"
 #include <stdio.h>
 #include <assert.h>
 #include <signal.h>
@@ -128,7 +128,7 @@ open_objfile (const char *filename)
 
 
 SIM_RC
-sim_load (SIM_DESC sd, char *prog, struct bfd * abfd, int from_tty)
+sim_load (SIM_DESC sd, const char *prog, struct bfd * abfd, int from_tty)
 {
   check_desc (sd);
 
@@ -405,7 +405,7 @@ sim_store_register (SIM_DESC sd, int regno, unsigned char *buf, int length)
   check_desc (sd);
 
   if (!check_regno (regno))
-    return 0;
+    return -1;
 
   size = reg_size (regno);
 
@@ -502,7 +502,7 @@ sim_store_register (SIM_DESC sd, int regno, unsigned char *buf, int length)
 	default:
 	  fprintf (stderr, "m32c minisim: unrecognized register number: %d\n",
 		   regno);
-	  return -1;
+	  return 0;
 	}
     }
 
@@ -530,28 +530,28 @@ m32c_signal_to_target (int m32c)
   switch (m32c)
     {
     case 4:
-      return TARGET_SIGNAL_ILL;
+      return GDB_SIGNAL_ILL;
 
     case 5:
-      return TARGET_SIGNAL_TRAP;
+      return GDB_SIGNAL_TRAP;
 
     case 10:
-      return TARGET_SIGNAL_BUS;
+      return GDB_SIGNAL_BUS;
 
     case 11:
-      return TARGET_SIGNAL_SEGV;
+      return GDB_SIGNAL_SEGV;
 
     case 24:
-      return TARGET_SIGNAL_XCPU;
+      return GDB_SIGNAL_XCPU;
 
     case 2:
-      return TARGET_SIGNAL_INT;
+      return GDB_SIGNAL_INT;
 
     case 8:
-      return TARGET_SIGNAL_FPE;
+      return GDB_SIGNAL_FPE;
 
     case 6:
-      return TARGET_SIGNAL_ABRT;
+      return GDB_SIGNAL_ABRT;
     }
 
   return 0;
@@ -566,7 +566,7 @@ handle_step (int rc)
   if (M32C_STEPPED (rc) || M32C_HIT_BREAK (rc))
     {
       reason = sim_stopped;
-      siggnal = TARGET_SIGNAL_TRAP;
+      siggnal = GDB_SIGNAL_TRAP;
     }
   else if (M32C_STOPPED (rc))
     {
@@ -613,7 +613,7 @@ sim_resume (SIM_DESC sd, int step, int sig_to_deliver)
 	    {
 	      stop = 0;
 	      reason = sim_stopped;
-	      siggnal = TARGET_SIGNAL_INT;
+	      siggnal = GDB_SIGNAL_INT;
 	      break;
 	    }
 
@@ -650,11 +650,12 @@ sim_stop_reason (SIM_DESC sd, enum sim_stop *reason_p, int *sigrc_p)
 }
 
 void
-sim_do_command (SIM_DESC sd, char *cmd)
+sim_do_command (SIM_DESC sd, const char *cmd)
 {
-  check_desc (sd);
+  const char *args;
+  char *p = strdup (cmd);
 
-  char *p = cmd;
+  check_desc (sd);
 
   /* Skip leading whitespace.  */
   while (isspace (*p))
@@ -667,7 +668,6 @@ sim_do_command (SIM_DESC sd, char *cmd)
 
   /* Null-terminate the command word, and record the start of any
      further arguments.  */
-  char *args;
   if (*p)
     {
       *p = '\0';
@@ -701,4 +701,12 @@ sim_do_command (SIM_DESC sd, char *cmd)
   else
     printf ("The 'sim' command expects either 'trace' or 'verbose'"
 	    " as a subcommand.\n");
+
+  free (p);
+}
+
+char **
+sim_complete_command (SIM_DESC sd, const char *text, const char *word)
+{
+  return NULL;
 }

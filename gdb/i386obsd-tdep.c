@@ -1,7 +1,6 @@
 /* Target-dependent code for OpenBSD/i386.
 
-   Copyright (C) 1988, 1989, 1991, 1992, 1994, 1996, 2000, 2001, 2002, 2003,
-   2004, 2005, 2006, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 1988-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -32,8 +31,9 @@
 #include "trad-frame.h"
 
 #include "gdb_assert.h"
-#include "gdb_string.h"
+#include <string.h>
 
+#include "obsd-tdep.h"
 #include "i386-tdep.h"
 #include "i387-tdep.h"
 #include "solib-svr4.h"
@@ -81,7 +81,7 @@ i386obsd_sigtramp_p (struct frame_info *this_frame)
   size_t buflen = sizeof sigreturn;
   const int *offset;
   gdb_byte *buf;
-  char *name;
+  const char *name;
 
   /* If the function has a valid symbol name, it isn't a
      trampoline.  */
@@ -142,7 +142,8 @@ i386obsd_aout_supply_regset (const struct regset *regset,
 			     struct regcache *regcache, int regnum,
 			     const void *regs, size_t len)
 {
-  const struct gdbarch_tdep *tdep = gdbarch_tdep (regset->arch);
+  struct gdbarch *gdbarch = get_regcache_arch (regcache);
+  const struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
   const gdb_byte *gregs = regs;
 
   gdb_assert (len >= tdep->sizeof_gregset + I387_SIZEOF_FSAVE);
@@ -150,6 +151,11 @@ i386obsd_aout_supply_regset (const struct regset *regset,
   i386_supply_gregset (regset, regcache, regnum, regs, tdep->sizeof_gregset);
   i387_supply_fsave (regcache, regnum, gregs + tdep->sizeof_gregset);
 }
+
+static const struct regset i386obsd_aout_gregset =
+  {
+    NULL, i386obsd_aout_supply_regset, NULL
+  };
 
 static const struct regset *
 i386obsd_aout_regset_from_core_section (struct gdbarch *gdbarch,
@@ -163,12 +169,7 @@ i386obsd_aout_regset_from_core_section (struct gdbarch *gdbarch,
 
   if (strcmp (sect_name, ".reg") == 0
       && sect_size >= tdep->sizeof_gregset + I387_SIZEOF_FSAVE)
-    {
-      if (tdep->gregset == NULL)
-        tdep->gregset =
-	  regset_alloc (gdbarch, i386obsd_aout_supply_regset, NULL);
-      return tdep->gregset;
-    }
+    return &i386obsd_aout_gregset;
 
   return NULL;
 }
@@ -348,7 +349,7 @@ i386obsd_trapframe_cache (struct frame_info *this_frame, void **this_cache)
   struct trad_frame_cache *cache;
   CORE_ADDR func, sp, addr;
   ULONGEST cs;
-  char *name;
+  const char *name;
   int i;
 
   if (*this_cache)
@@ -413,7 +414,7 @@ i386obsd_trapframe_sniffer (const struct frame_unwind *self,
 			    void **this_prologue_cache)
 {
   ULONGEST cs;
-  char *name;
+  const char *name;
 
   /* Check Current Privilege Level and bail out if we're not executing
      in kernel space.  */
@@ -433,6 +434,7 @@ static const struct frame_unwind i386obsd_trapframe_unwind = {
      frame, but SIGTRAMP_FRAME would print <signal handler called>,
      which really is not what we want here.  */
   NORMAL_FRAME,
+  default_frame_unwind_stop_reason,
   i386obsd_trapframe_this_id,
   i386obsd_trapframe_prev_register,
   NULL,
@@ -447,6 +449,7 @@ i386obsd_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
 
   /* Obviously OpenBSD is BSD-based.  */
   i386bsd_init_abi (info, gdbarch);
+  obsd_init_abi (info, gdbarch);
 
   /* OpenBSD has a different `struct reg'.  */
   tdep->gregset_reg_offset = i386obsd_r_reg_offset;

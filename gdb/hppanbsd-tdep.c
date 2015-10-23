@@ -1,6 +1,6 @@
 /* Target-dependent code for NetBSD/hppa
 
-   Copyright (C) 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2008-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -26,7 +26,7 @@
 #include "tramp-frame.h"
 
 #include "gdb_assert.h"
-#include "gdb_string.h"
+#include <string.h>
 
 #include "hppa-tdep.h"
 #include "hppabsd-tdep.h"
@@ -164,11 +164,11 @@ static int hppanbsd_reg_offset[] =
    REGCACHE.  If REGNUM is -1, do this for all registers in REGSET.  */
 
 static void
-hppanbsd_supply_gregset (const struct regset *regset, struct regcache *regcache,
-		     int regnum, const void *gregs, size_t len)
+hppanbsd_supply_gregset (const struct regset *regset,
+			 struct regcache *regcache,
+			 int regnum, const void *gregs, size_t len)
 {
   const gdb_byte *regs = gregs;
-  size_t offset;
   int i;
 
   gdb_assert (len >= HPPANBSD_SIZEOF_GREGS);
@@ -181,7 +181,7 @@ hppanbsd_supply_gregset (const struct regset *regset, struct regcache *regcache,
 
 /* NetBSD/hppa register set.  */
 
-static struct regset hppanbsd_gregset =
+static const struct regset hppanbsd_gregset =
 {
   NULL,
   hppanbsd_supply_gregset

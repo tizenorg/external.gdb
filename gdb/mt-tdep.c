@@ -1,6 +1,6 @@
 /* Target-dependent code for Morpho mt processor, for GDB.
 
-   Copyright (C) 2005, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2005-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -27,7 +27,7 @@
 #include "dis-asm.h"
 #include "arch-utils.h"
 #include "gdbtypes.h"
-#include "gdb_string.h"
+#include <string.h>
 #include "regcache.h"
 #include "reggroups.h"
 #include "gdbcore.h"
@@ -335,7 +335,7 @@ mt_register_reggroup_p (struct gdbarch *gdbarch, int regnum,
    values.  */
 
 static enum return_value_convention
-mt_return_value (struct gdbarch *gdbarch, struct type *func_type,
+mt_return_value (struct gdbarch *gdbarch, struct value *function,
 		 struct type *type, struct regcache *regcache,
 		 gdb_byte *readbuf, const gdb_byte *writebuf)
 {
@@ -408,7 +408,7 @@ mt_skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc)
 {
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   CORE_ADDR func_addr = 0, func_end = 0;
-  char *func_name;
+  const char *func_name;
   unsigned long instr;
 
   if (find_pc_partial_function (pc, &func_name, &func_addr, &func_end))
@@ -455,7 +455,7 @@ mt_skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc)
    instruction in the instruction set.
 
    The BP for ms1 is defined as 0x68000000 (BREAK).
-   The BP for ms2 is defined as 0x69000000 (illegal)  */
+   The BP for ms2 is defined as 0x69000000 (illegal).  */
 
 static const gdb_byte *
 mt_breakpoint_from_pc (struct gdbarch *gdbarch, CORE_ADDR *bp_addr,
@@ -482,7 +482,7 @@ mt_select_coprocessor (struct gdbarch *gdbarch,
   unsigned index, base;
   gdb_byte copro[4];
 
-  /* Get the copro pseudo regnum. */
+  /* Get the copro pseudo regnum.  */
   regcache_raw_read (regcache, MT_COPRO_REGNUM, copro);
   base = ((extract_signed_integer (&copro[0], 2, byte_order)
 	   * MT_COPRO_PSEUDOREG_DIM_2)
@@ -523,9 +523,9 @@ mt_select_coprocessor (struct gdbarch *gdbarch,
    Additionally there is an array of coprocessor registers which track
    the coprocessor registers for each coprocessor.  */
 
-static void
+static enum register_status
 mt_pseudo_register_read (struct gdbarch *gdbarch,
-			  struct regcache *regcache, int regno, gdb_byte *buf)
+			 struct regcache *regcache, int regno, gdb_byte *buf)
 {
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
 
@@ -533,34 +533,45 @@ mt_pseudo_register_read (struct gdbarch *gdbarch,
     {
     case MT_COPRO_REGNUM:
     case MT_COPRO_PSEUDOREG_REGNUM:
-      regcache_raw_read (regcache, MT_COPRO_REGNUM, buf);
-      break;
+      return regcache_raw_read (regcache, MT_COPRO_REGNUM, buf);
     case MT_MAC_REGNUM:
     case MT_MAC_PSEUDOREG_REGNUM:
       if (gdbarch_bfd_arch_info (gdbarch)->mach == bfd_mach_mrisc2
 	  || gdbarch_bfd_arch_info (gdbarch)->mach == bfd_mach_ms2)
 	{
+	  enum register_status status;
 	  ULONGEST oldmac = 0, ext_mac = 0;
 	  ULONGEST newmac;
 
-	  regcache_cooked_read_unsigned (regcache, MT_MAC_REGNUM, &oldmac);
+	  status = regcache_cooked_read_unsigned (regcache, MT_MAC_REGNUM, &oldmac);
+	  if (status != REG_VALID)
+	    return status;
+
 	  regcache_cooked_read_unsigned (regcache, MT_EXMAC_REGNUM, &ext_mac);
+	  if (status != REG_VALID)
+	    return status;
+
 	  newmac =
 	    (oldmac & 0xffffffff) | ((long long) (ext_mac & 0xff) << 32);
 	  store_signed_integer (buf, 8, byte_order, newmac);
+
+	  return REG_VALID;
 	}
       else
-	regcache_raw_read (regcache, MT_MAC_REGNUM, buf);
+	return regcache_raw_read (regcache, MT_MAC_REGNUM, buf);
       break;
     default:
       {
 	unsigned index = mt_select_coprocessor (gdbarch, regcache, regno);
 	
 	if (index == MT_COPRO_PSEUDOREG_MAC_REGNUM)
-	  mt_pseudo_register_read (gdbarch, regcache,
-				   MT_MAC_PSEUDOREG_REGNUM, buf);
+	  return mt_pseudo_register_read (gdbarch, regcache,
+					  MT_MAC_PSEUDOREG_REGNUM, buf);
 	else if (index < MT_NUM_REGS - MT_CPR0_REGNUM)
-	  regcache_raw_read (regcache, index + MT_CPR0_REGNUM, buf);
+	  return regcache_raw_read (regcache, index + MT_CPR0_REGNUM, buf);
+	else
+	  /* ??? */
+	  return REG_VALID;
       }
       break;
     }
@@ -674,7 +685,7 @@ mt_registers_info (struct gdbarch *gdbarch,
 	  buff = alloca (regsize);
 	  bytes = alloca (regsize * sizeof (*bytes));
 
-	  frame_register_read (frame, regnum, buff);
+	  deprecated_frame_register_read (frame, regnum, buff);
 
 	  fputs_filtered (gdbarch_register_name
 			  (gdbarch, regnum), file);
@@ -699,7 +710,7 @@ mt_registers_info (struct gdbarch *gdbarch,
 	  struct value_print_options opts;
 
 	  buf = alloca (register_size (gdbarch, MT_COPRO_REGNUM));
-	  frame_register_read (frame, MT_COPRO_REGNUM, buf);
+	  deprecated_frame_register_read (frame, MT_COPRO_REGNUM, buf);
 	  /* And print.  */
 	  regnum = MT_COPRO_PSEUDOREG_REGNUM;
 	  fputs_filtered (gdbarch_register_name (gdbarch, regnum),
@@ -707,7 +718,7 @@ mt_registers_info (struct gdbarch *gdbarch,
 	  print_spaces_filtered (15 - strlen (gdbarch_register_name
 					        (gdbarch, regnum)),
 				 file);
-	  get_raw_print_options (&opts);
+	  get_no_prettyformat_print_options (&opts);
 	  opts.deref_ref = 1;
 	  val_print (register_type (gdbarch, regnum), buf,
 		     0, 0, file, 0, NULL,
@@ -720,13 +731,13 @@ mt_registers_info (struct gdbarch *gdbarch,
 	  gdb_byte buf[3 * sizeof (LONGEST)];
 
 	  /* Get the two "real" mac registers.  */
-	  frame_register_read (frame, MT_MAC_REGNUM, buf);
+	  deprecated_frame_register_read (frame, MT_MAC_REGNUM, buf);
 	  oldmac = extract_unsigned_integer
 	    (buf, register_size (gdbarch, MT_MAC_REGNUM), byte_order);
 	  if (gdbarch_bfd_arch_info (gdbarch)->mach == bfd_mach_mrisc2
 	      || gdbarch_bfd_arch_info (gdbarch)->mach == bfd_mach_ms2)
 	    {
-	      frame_register_read (frame, MT_EXMAC_REGNUM, buf);
+	      deprecated_frame_register_read (frame, MT_EXMAC_REGNUM, buf);
 	      ext_mac = extract_unsigned_integer
 		(buf, register_size (gdbarch, MT_EXMAC_REGNUM), byte_order);
 	    }
@@ -834,16 +845,20 @@ mt_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
   for (j = nargs - 1; j >= i; j--)
     {
       gdb_byte *val;
+      struct cleanup *back_to;
+      const gdb_byte *contents = value_contents (args[j]);
       
       /* Right-justify the value in an aligned-length buffer.  */
       typelen = TYPE_LENGTH (value_type (args[j]));
       slacklen = (wordsize - (typelen % wordsize)) % wordsize;
-      val = alloca (typelen + slacklen);
-      memcpy (val, value_contents (args[j]), typelen);
+      val = xmalloc (typelen + slacklen);
+      back_to = make_cleanup (xfree, val);
+      memcpy (val, contents, typelen);
       memset (val + typelen, 0, slacklen);
       /* Now write this data to the stack.  */
       stack_dest -= typelen + slacklen;
       write_memory (stack_dest, val, typelen + slacklen);
+      do_cleanups (back_to);
     }
 
   /* Finally, if a param needs to be split between registers and stack, 
@@ -876,7 +891,7 @@ mt_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
 
 struct mt_unwind_cache
 {
-  /* The previous frame's inner most stack address.  
+  /* The previous frame's inner most stack address.
      Used as this frame ID's stack_addr.  */
   CORE_ADDR prev_sp;
   CORE_ADDR frame_base;
@@ -914,7 +929,7 @@ mt_frame_unwind_cache (struct frame_info *this_frame,
   info->frameless_p = 1;
   info->saved_regs = trad_frame_alloc_saved_regs (this_frame);
 
-  /* Grab the frame-relative values of SP and FP, needed below. 
+  /* Grab the frame-relative values of SP and FP, needed below.
      The frame_saved_register function will find them on the
      stack or in the registers as appropriate.  */
   sp = get_frame_register_unsigned (this_frame, MT_SP_REGNUM);
@@ -932,17 +947,17 @@ mt_frame_unwind_cache (struct frame_info *this_frame,
   for (next_addr = start_addr; next_addr < end_addr; next_addr += 4)
     {
       instr = get_frame_memory_unsigned (this_frame, next_addr, 4);
-      if (delayed_store)	/* previous instr was a push */
+      if (delayed_store)	/* Previous instr was a push.  */
 	{
 	  upper_half = delayed_store >> 16;
 	  regnum = upper_half & 0xf;
 	  offset = delayed_store & 0xffff;
 	  switch (upper_half & 0xfff0)
 	    {
-	    case 0x43c0:	/* push using frame pointer */
+	    case 0x43c0:	/* push using frame pointer.  */
 	      info->saved_regs[regnum].addr = offset;
 	      break;
-	    case 0x43d0:	/* push using stack pointer */
+	    case 0x43d0:	/* push using stack pointer.  */
 	      info->saved_regs[regnum].addr = offset;
 	      break;
 	    default:		/* lint */
@@ -956,7 +971,8 @@ mt_frame_unwind_cache (struct frame_info *this_frame,
 	case 0x12000000:	/* NO-OP */
 	  continue;
 	case 0x12ddc000:	/* copy sp into fp */
-	  info->frameless_p = 0;	/* Record that the frame pointer is in use.  */
+	  info->frameless_p = 0;	/* Record that the frame
+					   pointer is in use.  */
 	  continue;
 	default:
 	  upper_half = instr >> 16;
@@ -989,9 +1005,9 @@ mt_frame_unwind_cache (struct frame_info *this_frame,
 	     keep scanning until we reach it (or we reach end_addr).  */
 
 	  if (prologue_end_addr && (prologue_end_addr > (next_addr + 4)))
-	    continue;		/* Keep scanning, recording saved_regs etc.  */
+	    continue;	/* Keep scanning, recording saved_regs etc.  */
 	  else
-	    break;		/* Quit scanning: breakpoint can be set here.  */
+	    break;	/* Quit scanning: breakpoint can be set here.  */
 	}
     }
 
@@ -1102,6 +1118,7 @@ mt_frame_base_address (struct frame_info *this_frame,
 
 static const struct frame_unwind mt_frame_unwind = {
   NORMAL_FRAME,
+  default_frame_unwind_stop_reason,
   mt_frame_this_id,
   mt_frame_prev_register,
   NULL,
@@ -1132,7 +1149,7 @@ mt_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
 
   /* None found, create a new architecture from the information
      provided.  */
-  tdep = XCALLOC (1, struct gdbarch_tdep);
+  tdep = XCNEW (struct gdbarch_tdep);
   gdbarch = gdbarch_alloc (&info, tdep);
 
   set_gdbarch_float_format (gdbarch, floatformats_ieee_single);
@@ -1184,7 +1201,7 @@ mt_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   set_gdbarch_unwind_pc (gdbarch, mt_unwind_pc);
   set_gdbarch_unwind_sp (gdbarch, mt_unwind_sp);
 
-  /* Methods for saving / extracting a dummy frame's ID.  
+  /* Methods for saving / extracting a dummy frame's ID.
      The ID's stack address must match the SP value returned by
      PUSH_DUMMY_CALL, and saved by generic_save_dummy_frame_tos.  */
   set_gdbarch_dummy_id (gdbarch, mt_dummy_id);

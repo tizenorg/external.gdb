@@ -1,7 +1,6 @@
 /* Objective-C language support definitions for GDB, the GNU debugger.
 
-   Copyright (C) 1992, 2005, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 1992-2014 Free Software Foundation, Inc.
 
    Contributed by Apple Computer, Inc.
 
@@ -21,14 +20,13 @@
 #if !defined(OBJC_LANG_H)
 #define OBJC_LANG_H
 
+#include "cp-support.h"		/* For VEC (const_char_ptr) */
+
 struct stoken;
 
 struct value;
 struct block;
-
-extern int objc_parse (void);		/* Defined in c-exp.y */
-
-extern void objc_error (char *);	/* Defined in c-exp.y */
+struct parser_state;
 
 extern CORE_ADDR lookup_objc_class     (struct gdbarch *gdbarch,
 					char *classname);
@@ -39,15 +37,8 @@ extern char *objc_demangle (const char *mangled, int options);
 
 extern int find_objc_msgcall (CORE_ADDR pc, CORE_ADDR *new_pc);
 
-extern char *parse_selector (char *method, char **selector);
-
-extern char *parse_method (char *method, char *type, 
-			   char **class, char **category, 
-			   char **selector);
-
-extern char *find_imps (struct symtab *symtab, struct block *block,
-			char *method, struct symbol **syms, 
-			unsigned int *nsym, unsigned int *ndebug);
+extern const char *
+  find_imps (const char *method, VEC (const_char_ptr) **symbol_names);
 
 extern struct value *value_nsstring (struct gdbarch *gdbarch,
 				     char *ptr, int len);
@@ -55,9 +46,9 @@ extern struct value *value_nsstring (struct gdbarch *gdbarch,
 /* for parsing Objective C */
 extern void start_msglist (void);
 extern void add_msglist (struct stoken *str, int addcolon);
-extern int end_msglist (void);
+extern int end_msglist (struct parser_state *);
 
-struct symbol *lookup_struct_typedef (char *name, struct block *block,
+struct symbol *lookup_struct_typedef (char *name, const struct block *block,
 				      int noerr);
 
 #endif

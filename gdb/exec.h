@@ -1,6 +1,6 @@
 /* Work with executable files, for GDB, the GNU debugger.
 
-   Copyright (C) 2003, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2003-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -22,15 +22,18 @@
 
 #include "target.h"
 #include "progspace.h"
+#include "memrange.h"
 
 struct target_section;
 struct target_ops;
 struct bfd;
+struct objfile;
 
 extern struct target_ops exec_ops;
 
 #define exec_bfd current_program_space->ebfd
 #define exec_bfd_mtime current_program_space->ebfd_mtime
+#define exec_filename current_program_space->pspace_exec_filename
 
 /* Builds a section table, given args BFD, SECTABLE_PTR, SECEND_PTR.
    Returns 0 if OK, 1 on error.  */
@@ -38,10 +41,18 @@ extern struct target_ops exec_ops;
 extern int build_section_table (struct bfd *, struct target_section **,
 				struct target_section **);
 
-/* Resize the section table held by TABLE, by NUM_ADDED.  Returns the
-   old size.  */
+/* Remove all entries from TABLE.  */
 
-extern int resize_section_table (struct target_section_table *, int);
+extern void clear_section_table (struct target_section_table *table);
+
+/* Read from mappable read-only sections of BFD executable files.
+   Return TARGET_XFER_OK, if read is successful.  Return
+   TARGET_XFER_EOF if read is done.  Return TARGET_XFER_E_IO
+   otherwise.  */
+
+extern enum target_xfer_status
+  exec_read_partial_read_only (gdb_byte *readbuf, ULONGEST offset,
+			       ULONGEST len, ULONGEST *xfered_len);
 
 /* Read or write from mappable sections of BFD executable files.
 
@@ -60,24 +71,40 @@ extern int resize_section_table (struct target_section_table *, int);
 
    One, and only one, of readbuf or writebuf must be non-NULL.  */
 
-extern int section_table_xfer_memory_partial (gdb_byte *, const gdb_byte *,
-					      ULONGEST, LONGEST,
-					      struct target_section *,
-					      struct target_section *,
-					      const char *);
+extern enum target_xfer_status
+  section_table_xfer_memory_partial (gdb_byte *,
+				     const gdb_byte *,
+				     ULONGEST, ULONGEST, ULONGEST *,
+				     struct target_section *,
+				     struct target_section *,
+				     const char *);
+
+/* Read from mappable read-only sections of BFD executable files.
+   Similar to exec_read_partial_read_only, but return
+   TARGET_XFER_UNAVAILABLE if data is unavailable.  */
+
+extern enum target_xfer_status
+  section_table_read_available_memory (gdb_byte *readbuf, ULONGEST offset,
+				       ULONGEST len, ULONGEST *xfered_len);
 
 /* Set the loaded address of a section.  */
 extern void exec_set_section_address (const char *, int, CORE_ADDR);
 
-/* Remove all target sections taken from ABFD.  */
+/* Remove all target sections owned by OWNER.  */
 
-extern void remove_target_sections (bfd *abfd);
+extern void remove_target_sections (void *owner);
 
 /* Add the sections array defined by [SECTIONS..SECTIONS_END[ to the
    current set of target sections.  */
 
-extern void add_target_sections (struct target_section *sections,
+extern void add_target_sections (void *owner,
+				 struct target_section *sections,
 				 struct target_section *sections_end);
+
+/* Add the sections of OBJFILE to the current set of target sections.
+ * OBJFILE owns the new target sections.  */
+
+extern void add_target_sections_of_objfile (struct objfile *objfile);
 
 /* Prints info about all sections defined in the TABLE.  ABFD is
    special cased --- it's filename is omitted; if it is the executable

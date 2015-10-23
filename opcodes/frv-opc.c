@@ -2,7 +2,7 @@
 
 THIS FILE IS MACHINE GENERATED WITH CGEN.
 
-Copyright 1996-2010 Free Software Foundation, Inc.
+Copyright (C) 1996-2014 Free Software Foundation, Inc.
 
 This file is part of the GNU Binutils and/or GDB, the GNU debugger.
 
@@ -33,6 +33,9 @@ This file is part of the GNU Binutils and/or GDB, the GNU debugger.
 /* -- opc.c */
 #include "elf/frv.h"
 #include <stdio.h>
+
+/* DEBUG appears below as argument of OP macro.  */
+#undef DEBUG
 
 /* Returns TRUE if {MAJOR,MACH} is a major branch of the FRV
    development tree.  */

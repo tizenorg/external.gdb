@@ -4,7 +4,7 @@
     
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
+    the Free Software Foundation; either version 3 of the License, or
     (at your option) any later version.
     
     This program is distributed in the hope that it will be useful,
@@ -13,8 +13,7 @@
     GNU General Public License for more details.
     
     You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+    along with this program; if not, see <http://www.gnu.org/licenses/>.
     
     */
 
@@ -203,7 +202,7 @@ open_disk_image(device *me,
   if (disk->image != NULL)
     fclose(disk->image);
   if (disk->name != NULL)
-    zfree(disk->name);
+    free(disk->name);
   disk->name = strdup(name);
   disk->image = fopen(disk->name, disk->read_only ? "r" : "r+");
   if (disk->image == NULL) {
@@ -351,7 +350,7 @@ hw_disk_instance_delete(device_instance *instance)
   hw_disk_instance *data = device_instance_data(instance);
   DITRACE(disk, ("delete - instance=%ld\n",
 		 (unsigned long)device_instance_to_external(instance)));
-  zfree(data);
+  free(data);
 }
 
 static int

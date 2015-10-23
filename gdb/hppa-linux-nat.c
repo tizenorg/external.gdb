@@ -1,7 +1,6 @@
 /* Functions specific to running GDB native on HPPA running GNU/Linux.
 
-   Copyright (C) 2004, 2005, 2006, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2004-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -21,7 +20,7 @@
 #include "defs.h"
 #include "gdbcore.h"
 #include "regcache.h"
-#include "gdb_string.h"
+#include <string.h>
 #include "inferior.h"
 #include "target.h"
 #include "linux-nat.h"
@@ -35,7 +34,7 @@
 
 #include "hppa-tdep.h"
 
-/* Prototypes for supply_gregset etc. */
+/* Prototypes for supply_gregset etc.  */
 #include "gregset.h"
 
 /* These must match the order of the register names.
@@ -225,9 +224,9 @@ fetch_register (struct regcache *regcache, int regno)
     }
 
   /* GNU/Linux LWP ID's are process ID's.  */
-  tid = TIDGET (inferior_ptid);
+  tid = ptid_get_lwp (inferior_ptid);
   if (tid == 0)
-    tid = PIDGET (inferior_ptid); /* Not a threaded program.  */
+    tid = ptid_get_pid (inferior_ptid); /* Not a threaded program.  */
 
   errno = 0;
   val = ptrace (PTRACE_PEEKUSER, tid, hppa_linux_register_addr (regno, 0), 0);
@@ -239,7 +238,7 @@ fetch_register (struct regcache *regcache, int regno)
   regcache_raw_supply (regcache, regno, &val);
 }
 
-/* Store one register. */
+/* Store one register.  */
 
 static void
 store_register (const struct regcache *regcache, int regno)
@@ -252,9 +251,9 @@ store_register (const struct regcache *regcache, int regno)
     return;
 
   /* GNU/Linux LWP ID's are process ID's.  */
-  tid = TIDGET (inferior_ptid);
+  tid = ptid_get_lwp (inferior_ptid);
   if (tid == 0)
-    tid = PIDGET (inferior_ptid); /* Not a threaded program.  */
+    tid = ptid_get_pid (inferior_ptid); /* Not a threaded program.  */
 
   errno = 0;
   regcache_raw_collect (regcache, regno, &val);
@@ -346,7 +345,7 @@ fill_gregset (const struct regcache *regcache,
 
 /*  Given a pointer to a floating point register set in /proc format
    (fpregset_t *), unpack the register contents and supply them as gdb's
-   idea of the current floating point register values. */
+   idea of the current floating point register values.  */
 
 void
 supply_fpregset (struct regcache *regcache, const gdb_fpregset_t *fpregsetp)
@@ -365,7 +364,7 @@ supply_fpregset (struct regcache *regcache, const gdb_fpregset_t *fpregsetp)
 /*  Given a pointer to a floating point register set in /proc format
    (fpregset_t *), update the register specified by REGNO from gdb's idea
    of the current floating point register set.  If REGNO is -1, update
-   them all. */
+   them all.  */
 
 void
 fill_fpregset (const struct regcache *regcache,

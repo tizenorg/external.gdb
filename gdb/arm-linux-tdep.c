@@ -1,7 +1,6 @@
 /* GNU/Linux on ARM target support.
 
-   Copyright (C) 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008,
-   2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 1999-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -33,6 +32,8 @@
 #include "trad-frame.h"
 #include "tramp-frame.h"
 #include "breakpoint.h"
+#include "auxv.h"
+#include "xml-syscall.h"
 
 #include "arm-tdep.h"
 #include "arm-linux-tdep.h"
@@ -40,10 +41,20 @@
 #include "glibc-tdep.h"
 #include "arch-utils.h"
 #include "inferior.h"
+#include "infrun.h"
 #include "gdbthread.h"
 #include "symfile.h"
 
-#include "gdb_string.h"
+#include "record-full.h"
+#include "linux-record.h"
+
+#include "cli/cli-utils.h"
+#include "stap-probe.h"
+#include "parser-defs.h"
+#include "user-regs.h"
+#include <ctype.h>
+#include "elf/common.h"
+#include <string.h>
 
 extern int arm_apcs_32;
 
@@ -53,9 +64,9 @@ extern int arm_apcs_32;
    of the software interrupt the kernel stops the inferior with a
    SIGTRAP, and wakes the debugger.  */
 
-static const char arm_linux_arm_le_breakpoint[] = { 0x01, 0x00, 0x9f, 0xef };
+static const gdb_byte arm_linux_arm_le_breakpoint[] = { 0x01, 0x00, 0x9f, 0xef };
 
-static const char arm_linux_arm_be_breakpoint[] = { 0xef, 0x9f, 0x00, 0x01 };
+static const gdb_byte arm_linux_arm_be_breakpoint[] = { 0xef, 0x9f, 0x00, 0x01 };
 
 /* However, the EABI syscall interface (new in Nov. 2005) does not look at
    the operand of the swi if old-ABI compatibility is disabled.  Therefore,
@@ -63,24 +74,24 @@ static const char arm_linux_arm_be_breakpoint[] = { 0xef, 0x9f, 0x00, 0x01 };
    version 2.5.70 (May 2003), so should be a safe assumption for EABI
    binaries.  */
 
-static const char eabi_linux_arm_le_breakpoint[] = { 0xf0, 0x01, 0xf0, 0xe7 };
+static const gdb_byte eabi_linux_arm_le_breakpoint[] = { 0xf0, 0x01, 0xf0, 0xe7 };
 
-static const char eabi_linux_arm_be_breakpoint[] = { 0xe7, 0xf0, 0x01, 0xf0 };
+static const gdb_byte eabi_linux_arm_be_breakpoint[] = { 0xe7, 0xf0, 0x01, 0xf0 };
 
 /* All the kernels which support Thumb support using a specific undefined
    instruction for the Thumb breakpoint.  */
 
-static const char arm_linux_thumb_be_breakpoint[] = {0xde, 0x01};
+static const gdb_byte arm_linux_thumb_be_breakpoint[] = {0xde, 0x01};
 
-static const char arm_linux_thumb_le_breakpoint[] = {0x01, 0xde};
+static const gdb_byte arm_linux_thumb_le_breakpoint[] = {0x01, 0xde};
 
 /* Because the 16-bit Thumb breakpoint is affected by Thumb-2 IT blocks,
    we must use a length-appropriate breakpoint for 32-bit Thumb
    instructions.  See also thumb_get_next_pc.  */
 
-static const char arm_linux_thumb2_be_breakpoint[] = { 0xf7, 0xf0, 0xa0, 0x00 };
+static const gdb_byte arm_linux_thumb2_be_breakpoint[] = { 0xf7, 0xf0, 0xa0, 0x00 };
 
-static const char arm_linux_thumb2_le_breakpoint[] = { 0xf0, 0xf7, 0x00, 0xa0 };
+static const gdb_byte arm_linux_thumb2_le_breakpoint[] = { 0xf0, 0xf7, 0x00, 0xa0 };
 
 /* Description of the longjmp buffer.  The buffer is treated as an array of 
    elements of size ARM_LINUX_JB_ELEMENT_SIZE.
@@ -105,7 +116,7 @@ static const char arm_linux_thumb2_le_breakpoint[] = { 0xf0, 0xf7, 0x00, 0xa0 };
    GOT = global offset table
 
    As much as possible, ELF dynamic linking defers the resolution of
-   jump/call addresses until the last minute. The technique used is
+   jump/call addresses until the last minute.  The technique used is
    inspired by the i386 ELF design, and is based on the following
    constraints.
 
@@ -147,9 +158,9 @@ static const char arm_linux_thumb2_le_breakpoint[] = { 0xf0, 0xf7, 0x00, 0xa0 };
 
    2) In the PLT:
 
-   The PLT is a synthetic area, created by the linker. It exists in
-   both executables and libraries. It is an array of stubs, one per
-   imported function call. It looks like this:
+   The PLT is a synthetic area, created by the linker.  It exists in
+   both executables and libraries.  It is an array of stubs, one per
+   imported function call.  It looks like this:
 
    PLT[0]:
    str     lr, [sp, #-4]!       @push the return address (lr)
@@ -171,7 +182,7 @@ static const char arm_linux_thumb2_le_breakpoint[] = { 0xf0, 0xf7, 0x00, 0xa0 };
    lr = &GOT[0] + 8
    = &GOT[2]
 
-   NOTE: PLT[0] borrows an offset .word from PLT[1]. This is a little
+   NOTE: PLT[0] borrows an offset .word from PLT[1].  This is a little
    "tight", but allows us to keep all the PLT entries the same size.
 
    PLT[n+1]:
@@ -188,12 +199,12 @@ static const char arm_linux_thumb2_le_breakpoint[] = { 0xf0, 0xf7, 0x00, 0xa0 };
    3) In the GOT:
 
    The GOT contains helper pointers for both code (PLT) fixups and
-   data fixups.  The first 3 entries of the GOT are special. The next
+   data fixups.  The first 3 entries of the GOT are special.  The next
    M entries (where M is the number of entries in the PLT) belong to
-   the PLT fixups. The next D (all remaining) entries belong to
-   various data fixups. The actual size of the GOT is 3 + M + D.
+   the PLT fixups.  The next D (all remaining) entries belong to
+   various data fixups.  The actual size of the GOT is 3 + M + D.
 
-   The GOT is also a synthetic area, created by the linker. It exists
+   The GOT is also a synthetic area, created by the linker.  It exists
    in both executables and libraries.  When the GOT is first
    initialized , all the GOT entries relating to PLT fixups are
    pointing to code back at PLT[0].
@@ -239,6 +250,7 @@ static const char arm_linux_thumb2_le_breakpoint[] = { 0xf0, 0xf7, 0x00, 0xa0 };
    whenever OABI support has been enabled in the kernel.  */
 #define ARM_OABI_SYSCALL_RESTART_SYSCALL 0xef900000
 #define ARM_LDR_PC_SP_12		0xe49df00c
+#define ARM_LDR_PC_SP_4			0xe49df004
 
 static void
 arm_linux_sigtramp_cache (struct frame_info *this_frame,
@@ -355,10 +367,36 @@ arm_linux_restart_syscall_init (const struct tramp_frame *self,
 				struct trad_frame_cache *this_cache,
 				CORE_ADDR func)
 {
+  struct gdbarch *gdbarch = get_frame_arch (this_frame);
   CORE_ADDR sp = get_frame_register_unsigned (this_frame, ARM_SP_REGNUM);
+  CORE_ADDR pc = get_frame_memory_unsigned (this_frame, sp, 4);
+  CORE_ADDR cpsr = get_frame_register_unsigned (this_frame, ARM_PS_REGNUM);
+  ULONGEST t_bit = arm_psr_thumb_bit (gdbarch);
+  int sp_offset;
 
-  trad_frame_set_reg_addr (this_cache, ARM_PC_REGNUM, sp);
-  trad_frame_set_reg_value (this_cache, ARM_SP_REGNUM, sp + 12);
+  /* There are two variants of this trampoline; with older kernels, the
+     stub is placed on the stack, while newer kernels use the stub from
+     the vector page.  They are identical except that the older version
+     increments SP by 12 (to skip stored PC and the stub itself), while
+     the newer version increments SP only by 4 (just the stored PC).  */
+  if (self->insn[1].bytes == ARM_LDR_PC_SP_4)
+    sp_offset = 4;
+  else
+    sp_offset = 12;
+
+  /* Update Thumb bit in CPSR.  */
+  if (pc & 1)
+    cpsr |= t_bit;
+  else
+    cpsr &= ~t_bit;
+
+  /* Remove Thumb bit from PC.  */
+  pc = gdbarch_addr_bits_remove (gdbarch, pc);
+
+  /* Save previous register values.  */
+  trad_frame_set_reg_value (this_cache, ARM_SP_REGNUM, sp + sp_offset);
+  trad_frame_set_reg_value (this_cache, ARM_PC_REGNUM, pc);
+  trad_frame_set_reg_value (this_cache, ARM_PS_REGNUM, cpsr);
 
   /* Save a frame ID.  */
   trad_frame_set_id (this_cache, frame_id_build (sp, func));
@@ -412,6 +450,17 @@ static struct tramp_frame arm_linux_restart_syscall_tramp_frame = {
   {
     { ARM_OABI_SYSCALL_RESTART_SYSCALL, -1 },
     { ARM_LDR_PC_SP_12, -1 },
+    { TRAMP_SENTINEL_INSN }
+  },
+  arm_linux_restart_syscall_init
+};
+
+static struct tramp_frame arm_kernel_linux_restart_syscall_tramp_frame = {
+  NORMAL_FRAME,
+  4,
+  {
+    { ARM_OABI_SYSCALL_RESTART_SYSCALL, -1 },
+    { ARM_LDR_PC_SP_4, -1 },
     { TRAMP_SENTINEL_INSN }
   },
   arm_linux_restart_syscall_init
@@ -600,6 +649,59 @@ arm_linux_collect_nwfpe (const struct regset *regset,
 			  regs + INT_REGISTER_SIZE * ARM_FPS_REGNUM);
 }
 
+/* Support VFP register format.  */
+
+#define ARM_LINUX_SIZEOF_VFP (32 * 8 + 4)
+
+static void
+arm_linux_supply_vfp (const struct regset *regset,
+		      struct regcache *regcache,
+		      int regnum, const void *regs_buf, size_t len)
+{
+  const gdb_byte *regs = regs_buf;
+  int regno;
+
+  if (regnum == ARM_FPSCR_REGNUM || regnum == -1)
+    regcache_raw_supply (regcache, ARM_FPSCR_REGNUM, regs + 32 * 8);
+
+  for (regno = ARM_D0_REGNUM; regno <= ARM_D31_REGNUM; regno++)
+    if (regnum == -1 || regnum == regno)
+      regcache_raw_supply (regcache, regno,
+			   regs + (regno - ARM_D0_REGNUM) * 8);
+}
+
+static void
+arm_linux_collect_vfp (const struct regset *regset,
+			 const struct regcache *regcache,
+			 int regnum, void *regs_buf, size_t len)
+{
+  gdb_byte *regs = regs_buf;
+  int regno;
+
+  if (regnum == ARM_FPSCR_REGNUM || regnum == -1)
+    regcache_raw_collect (regcache, ARM_FPSCR_REGNUM, regs + 32 * 8);
+
+  for (regno = ARM_D0_REGNUM; regno <= ARM_D31_REGNUM; regno++)
+    if (regnum == -1 || regnum == regno)
+      regcache_raw_collect (regcache, regno,
+			    regs + (regno - ARM_D0_REGNUM) * 8);
+}
+
+static const struct regset arm_linux_gregset =
+  {
+    NULL, arm_linux_supply_gregset, arm_linux_collect_gregset
+  };
+
+static const struct regset arm_linux_fpregset =
+  {
+    NULL, arm_linux_supply_nwfpe, arm_linux_collect_nwfpe
+  };
+
+static const struct regset arm_linux_vfpregset =
+  {
+    NULL, arm_linux_supply_vfp, arm_linux_collect_vfp
+  };
+
 /* Return the appropriate register set for the core section identified
    by SECT_NAME and SECT_SIZE.  */
 
@@ -607,47 +709,142 @@ static const struct regset *
 arm_linux_regset_from_core_section (struct gdbarch *gdbarch,
 				    const char *sect_name, size_t sect_size)
 {
-  struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
-
   if (strcmp (sect_name, ".reg") == 0
       && sect_size == ARM_LINUX_SIZEOF_GREGSET)
-    {
-      if (tdep->gregset == NULL)
-        tdep->gregset = regset_alloc (gdbarch, arm_linux_supply_gregset,
-                                      arm_linux_collect_gregset);
-      return tdep->gregset;
-    }
+    return &arm_linux_gregset;
 
   if (strcmp (sect_name, ".reg2") == 0
       && sect_size == ARM_LINUX_SIZEOF_NWFPE)
+    return &arm_linux_fpregset;
+
+  if (strcmp (sect_name, ".reg-arm-vfp") == 0
+      && sect_size == ARM_LINUX_SIZEOF_VFP)
+    return &arm_linux_vfpregset;
+
+  return NULL;
+}
+
+/* Core file register set sections.  */
+
+static struct core_regset_section arm_linux_fpa_regset_sections[] =
+{
+  { ".reg", ARM_LINUX_SIZEOF_GREGSET, "general-purpose" },
+  { ".reg2", ARM_LINUX_SIZEOF_NWFPE, "FPA floating-point" },
+  { NULL, 0}
+};
+
+static struct core_regset_section arm_linux_vfp_regset_sections[] =
+{
+  { ".reg", ARM_LINUX_SIZEOF_GREGSET, "general-purpose" },
+  { ".reg-arm-vfp", ARM_LINUX_SIZEOF_VFP, "VFP floating-point" },
+  { NULL, 0}
+};
+
+/* Determine target description from core file.  */
+
+static const struct target_desc *
+arm_linux_core_read_description (struct gdbarch *gdbarch,
+                                 struct target_ops *target,
+                                 bfd *abfd)
+{
+  CORE_ADDR arm_hwcap = 0;
+
+  if (target_auxv_search (target, AT_HWCAP, &arm_hwcap) != 1)
+    return NULL;
+
+  if (arm_hwcap & HWCAP_VFP)
     {
-      if (tdep->fpregset == NULL)
-        tdep->fpregset = regset_alloc (gdbarch, arm_linux_supply_nwfpe,
-                                       arm_linux_collect_nwfpe);
-      return tdep->fpregset;
+      /* NEON implies VFPv3-D32 or no-VFP unit.  Say that we only support
+         Neon with VFPv3-D32.  */
+      if (arm_hwcap & HWCAP_NEON)
+	return tdesc_arm_with_neon;
+      else if ((arm_hwcap & (HWCAP_VFPv3 | HWCAP_VFPv3D16)) == HWCAP_VFPv3)
+	return tdesc_arm_with_vfpv3;
+      else
+	return tdesc_arm_with_vfpv2;
     }
 
   return NULL;
 }
 
+
 /* Copy the value of next pc of sigreturn and rt_sigrturn into PC,
-   and return 1.  Return 0 if it is not a rt_sigreturn/sigreturn
-   syscall.  */
+   return 1.  In addition, set IS_THUMB depending on whether we
+   will return to ARM or Thumb code.  Return 0 if it is not a
+   rt_sigreturn/sigreturn syscall.  */
 static int
 arm_linux_sigreturn_return_addr (struct frame_info *frame,
 				 unsigned long svc_number,
-				 CORE_ADDR *pc)
+				 CORE_ADDR *pc, int *is_thumb)
 {
   /* Is this a sigreturn or rt_sigreturn syscall?  */
   if (svc_number == 119 || svc_number == 173)
     {
       if (get_frame_type (frame) == SIGTRAMP_FRAME)
 	{
+	  ULONGEST t_bit = arm_psr_thumb_bit (frame_unwind_arch (frame));
+	  CORE_ADDR cpsr
+	    = frame_unwind_register_unsigned (frame, ARM_PS_REGNUM);
+
+	  *is_thumb = (cpsr & t_bit) != 0;
 	  *pc = frame_unwind_caller_pc (frame);
 	  return 1;
 	}
     }
   return 0;
+}
+
+/* At a ptrace syscall-stop, return the syscall number.  This either
+   comes from the SWI instruction (OABI) or from r7 (EABI).
+
+   When the function fails, it should return -1.  */
+
+static LONGEST
+arm_linux_get_syscall_number (struct gdbarch *gdbarch,
+			      ptid_t ptid)
+{
+  struct regcache *regs = get_thread_regcache (ptid);
+  struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
+
+  ULONGEST pc;
+  ULONGEST cpsr;
+  ULONGEST t_bit = arm_psr_thumb_bit (gdbarch);
+  int is_thumb;
+  ULONGEST svc_number = -1;
+
+  regcache_cooked_read_unsigned (regs, ARM_PC_REGNUM, &pc);
+  regcache_cooked_read_unsigned (regs, ARM_PS_REGNUM, &cpsr);
+  is_thumb = (cpsr & t_bit) != 0;
+
+  if (is_thumb)
+    {
+      regcache_cooked_read_unsigned (regs, 7, &svc_number);
+    }
+  else
+    {
+      enum bfd_endian byte_order_for_code = 
+	gdbarch_byte_order_for_code (gdbarch);
+
+      /* PC gets incremented before the syscall-stop, so read the
+	 previous instruction.  */
+      unsigned long this_instr = 
+	read_memory_unsigned_integer (pc - 4, 4, byte_order_for_code);
+
+      unsigned long svc_operand = (0x00ffffff & this_instr);
+
+      if (svc_operand)
+	{
+          /* OABI */
+	  svc_number = svc_operand - 0x900000;
+	}
+      else
+	{
+          /* EABI */
+	  regcache_cooked_read_unsigned (regs, 7, &svc_number);
+	}
+    }
+
+  return svc_number;
 }
 
 /* When FRAME is at a syscall instruction, return the PC of the next
@@ -660,11 +857,11 @@ arm_linux_syscall_next_pc (struct frame_info *frame)
   CORE_ADDR return_addr = 0;
   int is_thumb = arm_frame_is_thumb (frame);
   ULONGEST svc_number = 0;
-  int is_sigreturn = 0;
 
   if (is_thumb)
     {
       svc_number = get_frame_register_unsigned (frame, 7);
+      return_addr = pc + 2;
     }
   else
     {
@@ -683,24 +880,15 @@ arm_linux_syscall_next_pc (struct frame_info *frame)
 	{
 	  svc_number = get_frame_register_unsigned (frame, 7);
 	}
-    }
 
-  is_sigreturn = arm_linux_sigreturn_return_addr (frame, svc_number, 
-						  &return_addr);
-
-  if (is_sigreturn)
-    return return_addr;
-  
-  if (is_thumb)
-    {
-      return_addr = pc + 2;
-      /* Addresses for calling Thumb functions have the bit 0 set.  */
-      return_addr |= 1;
-    }
-  else
-    {
       return_addr = pc + 4;
     }
+
+  arm_linux_sigreturn_return_addr (frame, svc_number, &return_addr, &is_thumb);
+
+  /* Addresses for calling Thumb functions have the bit 0 set.  */
+  if (is_thumb)
+    return_addr |= 1;
 
   return return_addr;
 }
@@ -713,7 +901,12 @@ arm_linux_software_single_step (struct frame_info *frame)
 {
   struct gdbarch *gdbarch = get_frame_arch (frame);
   struct address_space *aspace = get_frame_address_space (frame);
-  CORE_ADDR next_pc = arm_get_next_pc (frame, get_frame_pc (frame));
+  CORE_ADDR next_pc;
+
+  if (arm_deal_with_atomic_sequence (frame))
+    return 1;
+
+  next_pc = arm_get_next_pc (frame, get_frame_pc (frame));
 
   /* The Linux kernel offers some user-mode helpers in a high page.  We can
      not read this page (as of 2.6.23), and even if we could then we couldn't
@@ -723,7 +916,7 @@ arm_linux_software_single_step (struct frame_info *frame)
   if (next_pc > 0xffff0000)
     next_pc = get_frame_register_unsigned (frame, ARM_LR_REGNUM);
 
-  insert_single_step_breakpoint (gdbarch, aspace, next_pc);
+  arm_insert_single_step_breakpoint (gdbarch, aspace, next_pc);
 
   return 1;
 }
@@ -760,38 +953,35 @@ arm_linux_cleanup_svc (struct gdbarch *gdbarch,
 }
 
 static int
-arm_linux_copy_svc (struct gdbarch *gdbarch, uint32_t insn, CORE_ADDR to,
-		    struct regcache *regs, struct displaced_step_closure *dsc)
+arm_linux_copy_svc (struct gdbarch *gdbarch, struct regcache *regs,
+		    struct displaced_step_closure *dsc)
 {
-  CORE_ADDR from = dsc->insn_addr;
   CORE_ADDR return_to = 0;
 
   struct frame_info *frame;
-  unsigned int svc_number = displaced_read_reg (regs, from, 7);
+  unsigned int svc_number = displaced_read_reg (regs, dsc, 7);
   int is_sigreturn = 0;
-
-  if (debug_displaced)
-    fprintf_unfiltered (gdb_stdlog, "displaced: copying Linux svc insn %.8lx\n",
-			(unsigned long) insn);
+  int is_thumb;
 
   frame = get_current_frame ();
 
   is_sigreturn = arm_linux_sigreturn_return_addr(frame, svc_number,
-						 &return_to);
+						 &return_to, &is_thumb);
   if (is_sigreturn)
     {
 	  struct symtab_and_line sal;
 
 	  if (debug_displaced)
 	    fprintf_unfiltered (gdb_stdlog, "displaced: found "
-	      "sigreturn/rt_sigreturn SVC call. PC in frame = %lx\n",
+	      "sigreturn/rt_sigreturn SVC call.  PC in frame = %lx\n",
 	      (unsigned long) get_frame_pc (frame));
 
 	  if (debug_displaced)
-	    fprintf_unfiltered (gdb_stdlog, "displaced: unwind pc = %lx. "
+	    fprintf_unfiltered (gdb_stdlog, "displaced: unwind pc = %lx.  "
 	      "Setting momentary breakpoint.\n", (unsigned long) return_to);
 
-	  gdb_assert (inferior_thread ()->step_resume_breakpoint == NULL);
+	  gdb_assert (inferior_thread ()->control.step_resume_breakpoint
+		      == NULL);
 
 	  sal = find_pc_line (return_to, 0);
 	  sal.pc = return_to;
@@ -802,9 +992,12 @@ arm_linux_copy_svc (struct gdbarch *gdbarch, uint32_t insn, CORE_ADDR to,
 
 	  if (frame)
 	    {
-	      inferior_thread ()->step_resume_breakpoint
+	      inferior_thread ()->control.step_resume_breakpoint
         	= set_momentary_breakpoint (gdbarch, sal, get_frame_id (frame),
 					    bp_step_resume);
+
+	      /* set_momentary_breakpoint invalidates FRAME.  */
+	      frame = NULL;
 
 	      /* We need to make sure we actually insert the momentary
 	         breakpoint set above.  */
@@ -826,7 +1019,6 @@ arm_linux_copy_svc (struct gdbarch *gdbarch, uint32_t insn, CORE_ADDR to,
      Cleanup: if pc lands in scratch space, pc <- insn_addr + 4
               else leave pc alone.  */
 
-  dsc->modinsn[0] = insn;
 
   dsc->cleanup = &arm_linux_cleanup_svc;
   /* Pretend we wrote to the PC, so cleanup doesn't set PC to the next
@@ -879,7 +1071,7 @@ arm_catch_kernel_helper_return (struct gdbarch *gdbarch, CORE_ADDR from,
      Insn: ldr pc, [r14, #4]
      Cleanup: r14 <- tmp[0], pc <- tmp[0].  */
 
-  dsc->tmp[0] = displaced_read_reg (regs, from, ARM_LR_REGNUM);
+  dsc->tmp[0] = displaced_read_reg (regs, dsc, ARM_LR_REGNUM);
   displaced_write_reg (regs, dsc, ARM_LR_REGNUM, (ULONGEST) to + 4,
 		       CANNOT_WRITE_PC);
   write_memory_unsigned_integer (to + 8, 4, byte_order, from);
@@ -912,18 +1104,10 @@ arm_linux_displaced_step_copy_insn (struct gdbarch *gdbarch,
     }
   else
     {
-      enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
-      uint32_t insn = read_memory_unsigned_integer (from, 4, byte_order);
-
-      if (debug_displaced)
-	fprintf_unfiltered (gdb_stdlog, "displaced: stepping insn %.8lx "
-			    "at %.8lx\n", (unsigned long) insn,
-			    (unsigned long) from);
-
       /* Override the default handling of SVC instructions.  */
       dsc->u.svc.copy_svc_os = arm_linux_copy_svc;
 
-      arm_process_displaced_insn (gdbarch, insn, from, to, regs, dsc);
+      arm_process_displaced_insn (gdbarch, from, to, regs, dsc);
     }
 
   arm_displaced_init_closure (gdbarch, from, to, dsc);
@@ -931,11 +1115,226 @@ arm_linux_displaced_step_copy_insn (struct gdbarch *gdbarch,
   return dsc;
 }
 
+/* Implementation of `gdbarch_stap_is_single_operand', as defined in
+   gdbarch.h.  */
+
+static int
+arm_stap_is_single_operand (struct gdbarch *gdbarch, const char *s)
+{
+  return (*s == '#' || *s == '$' || isdigit (*s) /* Literal number.  */
+	  || *s == '[' /* Register indirection or
+			  displacement.  */
+	  || isalpha (*s)); /* Register value.  */
+}
+
+/* This routine is used to parse a special token in ARM's assembly.
+
+   The special tokens parsed by it are:
+
+      - Register displacement (e.g, [fp, #-8])
+
+   It returns one if the special token has been parsed successfully,
+   or zero if the current token is not considered special.  */
+
+static int
+arm_stap_parse_special_token (struct gdbarch *gdbarch,
+			      struct stap_parse_info *p)
+{
+  if (*p->arg == '[')
+    {
+      /* Temporary holder for lookahead.  */
+      const char *tmp = p->arg;
+      char *endp;
+      /* Used to save the register name.  */
+      const char *start;
+      char *regname;
+      int len, offset;
+      int got_minus = 0;
+      long displacement;
+      struct stoken str;
+
+      ++tmp;
+      start = tmp;
+
+      /* Register name.  */
+      while (isalnum (*tmp))
+	++tmp;
+
+      if (*tmp != ',')
+	return 0;
+
+      len = tmp - start;
+      regname = alloca (len + 2);
+
+      offset = 0;
+      if (isdigit (*start))
+	{
+	  /* If we are dealing with a register whose name begins with a
+	     digit, it means we should prefix the name with the letter
+	     `r', because GDB expects this name pattern.  Otherwise (e.g.,
+	     we are dealing with the register `fp'), we don't need to
+	     add such a prefix.  */
+	  regname[0] = 'r';
+	  offset = 1;
+	}
+
+      strncpy (regname + offset, start, len);
+      len += offset;
+      regname[len] = '\0';
+
+      if (user_reg_map_name_to_regnum (gdbarch, regname, len) == -1)
+	error (_("Invalid register name `%s' on expression `%s'."),
+	       regname, p->saved_arg);
+
+      ++tmp;
+      tmp = skip_spaces_const (tmp);
+      if (*tmp == '#' || *tmp == '$')
+	++tmp;
+
+      if (*tmp == '-')
+	{
+	  ++tmp;
+	  got_minus = 1;
+	}
+
+      displacement = strtol (tmp, &endp, 10);
+      tmp = endp;
+
+      /* Skipping last `]'.  */
+      if (*tmp++ != ']')
+	return 0;
+
+      /* The displacement.  */
+      write_exp_elt_opcode (&p->pstate, OP_LONG);
+      write_exp_elt_type (&p->pstate, builtin_type (gdbarch)->builtin_long);
+      write_exp_elt_longcst (&p->pstate, displacement);
+      write_exp_elt_opcode (&p->pstate, OP_LONG);
+      if (got_minus)
+	write_exp_elt_opcode (&p->pstate, UNOP_NEG);
+
+      /* The register name.  */
+      write_exp_elt_opcode (&p->pstate, OP_REGISTER);
+      str.ptr = regname;
+      str.length = len;
+      write_exp_string (&p->pstate, str);
+      write_exp_elt_opcode (&p->pstate, OP_REGISTER);
+
+      write_exp_elt_opcode (&p->pstate, BINOP_ADD);
+
+      /* Casting to the expected type.  */
+      write_exp_elt_opcode (&p->pstate, UNOP_CAST);
+      write_exp_elt_type (&p->pstate, lookup_pointer_type (p->arg_type));
+      write_exp_elt_opcode (&p->pstate, UNOP_CAST);
+
+      write_exp_elt_opcode (&p->pstate, UNOP_IND);
+
+      p->arg = tmp;
+    }
+  else
+    return 0;
+
+  return 1;
+}
+
+/* ARM process record-replay constructs: syscall, signal etc.  */
+
+struct linux_record_tdep arm_linux_record_tdep;
+
+/* arm_canonicalize_syscall maps from the native arm Linux set
+   of syscall ids into a canonical set of syscall ids used by
+   process record.  */
+
+static enum gdb_syscall
+arm_canonicalize_syscall (int syscall)
+{
+  enum { sys_process_vm_writev = 377 };
+
+  if (syscall <= gdb_sys_sched_getaffinity)
+    return syscall;
+  else if (syscall >= 243 && syscall <= 247)
+    return syscall + 2;
+  else if (syscall >= 248 && syscall <= 253)
+    return syscall + 4;
+
+  return -1;
+}
+
+/* Record all registers but PC register for process-record.  */
+
+static int
+arm_all_but_pc_registers_record (struct regcache *regcache)
+{
+  int i;
+
+  for (i = 0; i < ARM_PC_REGNUM; i++)
+    {
+      if (record_full_arch_list_add_reg (regcache, ARM_A1_REGNUM + i))
+        return -1;
+    }
+
+  if (record_full_arch_list_add_reg (regcache, ARM_PS_REGNUM))
+    return -1;
+
+  return 0;
+}
+
+/* Handler for arm system call instruction recording.  */
+
+static int
+arm_linux_syscall_record (struct regcache *regcache, unsigned long svc_number)
+{
+  int ret = 0;
+  enum gdb_syscall syscall_gdb;
+
+  syscall_gdb = arm_canonicalize_syscall (svc_number);
+
+  if (syscall_gdb < 0)
+    {
+      printf_unfiltered (_("Process record and replay target doesn't "
+                           "support syscall number %s\n"),
+                           plongest (svc_number));
+      return -1;
+    }
+
+  if (syscall_gdb == gdb_sys_sigreturn
+      || syscall_gdb == gdb_sys_rt_sigreturn)
+   {
+     if (arm_all_but_pc_registers_record (regcache))
+       return -1;
+     return 0;
+   }
+
+  ret = record_linux_system_call (syscall_gdb, regcache,
+                                  &arm_linux_record_tdep);
+  if (ret != 0)
+    return ret;
+
+  /* Record the return value of the system call.  */
+  if (record_full_arch_list_add_reg (regcache, ARM_A1_REGNUM))
+    return -1;
+  /* Record LR.  */
+  if (record_full_arch_list_add_reg (regcache, ARM_LR_REGNUM))
+    return -1;
+  /* Record CPSR.  */
+  if (record_full_arch_list_add_reg (regcache, ARM_PS_REGNUM))
+    return -1;
+
+  return 0;
+}
+
 static void
 arm_linux_init_abi (struct gdbarch_info info,
 		    struct gdbarch *gdbarch)
 {
+  static const char *const stap_integer_prefixes[] = { "#", "$", "", NULL };
+  static const char *const stap_register_prefixes[] = { "r", NULL };
+  static const char *const stap_register_indirection_prefixes[] = { "[",
+								    NULL };
+  static const char *const stap_register_indirection_suffixes[] = { "]",
+								    NULL };
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
+
+  linux_init_abi (info, gdbarch);
 
   tdep->lowest_pc = 0x8000;
   if (info.byte_order == BFD_ENDIAN_BIG)
@@ -1005,10 +1404,18 @@ arm_linux_init_abi (struct gdbarch_info info,
 				&arm_eabi_linux_rt_sigreturn_tramp_frame);
   tramp_frame_prepend_unwinder (gdbarch,
 				&arm_linux_restart_syscall_tramp_frame);
+  tramp_frame_prepend_unwinder (gdbarch,
+				&arm_kernel_linux_restart_syscall_tramp_frame);
 
   /* Core file support.  */
   set_gdbarch_regset_from_core_section (gdbarch,
 					arm_linux_regset_from_core_section);
+  set_gdbarch_core_read_description (gdbarch, arm_linux_core_read_description);
+
+  if (tdep->have_vfp_registers)
+    set_gdbarch_core_regset_sections (gdbarch, arm_linux_vfp_regset_sections);
+  else if (tdep->have_fpa_registers)
+    set_gdbarch_core_regset_sections (gdbarch, arm_linux_fpa_regset_sections);
 
   set_gdbarch_get_siginfo_type (gdbarch, linux_get_siginfo_type);
 
@@ -1020,8 +1427,186 @@ arm_linux_init_abi (struct gdbarch_info info,
 					   simple_displaced_step_free_closure);
   set_gdbarch_displaced_step_location (gdbarch, displaced_step_at_entry_point);
 
+  /* Reversible debugging, process record.  */
+  set_gdbarch_process_record (gdbarch, arm_process_record);
+
+  /* SystemTap functions.  */
+  set_gdbarch_stap_integer_prefixes (gdbarch, stap_integer_prefixes);
+  set_gdbarch_stap_register_prefixes (gdbarch, stap_register_prefixes);
+  set_gdbarch_stap_register_indirection_prefixes (gdbarch,
+					  stap_register_indirection_prefixes);
+  set_gdbarch_stap_register_indirection_suffixes (gdbarch,
+					  stap_register_indirection_suffixes);
+  set_gdbarch_stap_gdb_register_prefix (gdbarch, "r");
+  set_gdbarch_stap_is_single_operand (gdbarch, arm_stap_is_single_operand);
+  set_gdbarch_stap_parse_special_token (gdbarch,
+					arm_stap_parse_special_token);
 
   tdep->syscall_next_pc = arm_linux_syscall_next_pc;
+
+  /* `catch syscall' */
+  set_xml_syscall_file_name ("syscalls/arm-linux.xml");
+  set_gdbarch_get_syscall_number (gdbarch, arm_linux_get_syscall_number);
+
+  /* Syscall record.  */
+  tdep->arm_syscall_record = arm_linux_syscall_record;
+
+  /* Initialize the arm_linux_record_tdep.  */
+  /* These values are the size of the type that will be used in a system
+     call.  They are obtained from Linux Kernel source.  */
+  arm_linux_record_tdep.size_pointer
+    = gdbarch_ptr_bit (gdbarch) / TARGET_CHAR_BIT;
+  arm_linux_record_tdep.size__old_kernel_stat = 32;
+  arm_linux_record_tdep.size_tms = 16;
+  arm_linux_record_tdep.size_loff_t = 8;
+  arm_linux_record_tdep.size_flock = 16;
+  arm_linux_record_tdep.size_oldold_utsname = 45;
+  arm_linux_record_tdep.size_ustat = 20;
+  arm_linux_record_tdep.size_old_sigaction = 140;
+  arm_linux_record_tdep.size_old_sigset_t = 128;
+  arm_linux_record_tdep.size_rlimit = 8;
+  arm_linux_record_tdep.size_rusage = 72;
+  arm_linux_record_tdep.size_timeval = 8;
+  arm_linux_record_tdep.size_timezone = 8;
+  arm_linux_record_tdep.size_old_gid_t = 2;
+  arm_linux_record_tdep.size_old_uid_t = 2;
+  arm_linux_record_tdep.size_fd_set = 128;
+  arm_linux_record_tdep.size_dirent = 268;
+  arm_linux_record_tdep.size_dirent64 = 276;
+  arm_linux_record_tdep.size_statfs = 64;
+  arm_linux_record_tdep.size_statfs64 = 84;
+  arm_linux_record_tdep.size_sockaddr = 16;
+  arm_linux_record_tdep.size_int
+    = gdbarch_int_bit (gdbarch) / TARGET_CHAR_BIT;
+  arm_linux_record_tdep.size_long
+    = gdbarch_long_bit (gdbarch) / TARGET_CHAR_BIT;
+  arm_linux_record_tdep.size_ulong
+    = gdbarch_long_bit (gdbarch) / TARGET_CHAR_BIT;
+  arm_linux_record_tdep.size_msghdr = 28;
+  arm_linux_record_tdep.size_itimerval = 16;
+  arm_linux_record_tdep.size_stat = 88;
+  arm_linux_record_tdep.size_old_utsname = 325;
+  arm_linux_record_tdep.size_sysinfo = 64;
+  arm_linux_record_tdep.size_msqid_ds = 88;
+  arm_linux_record_tdep.size_shmid_ds = 84;
+  arm_linux_record_tdep.size_new_utsname = 390;
+  arm_linux_record_tdep.size_timex = 128;
+  arm_linux_record_tdep.size_mem_dqinfo = 24;
+  arm_linux_record_tdep.size_if_dqblk = 68;
+  arm_linux_record_tdep.size_fs_quota_stat = 68;
+  arm_linux_record_tdep.size_timespec = 8;
+  arm_linux_record_tdep.size_pollfd = 8;
+  arm_linux_record_tdep.size_NFS_FHSIZE = 32;
+  arm_linux_record_tdep.size_knfsd_fh = 132;
+  arm_linux_record_tdep.size_TASK_COMM_LEN = 16;
+  arm_linux_record_tdep.size_sigaction = 140;
+  arm_linux_record_tdep.size_sigset_t = 8;
+  arm_linux_record_tdep.size_siginfo_t = 128;
+  arm_linux_record_tdep.size_cap_user_data_t = 12;
+  arm_linux_record_tdep.size_stack_t = 12;
+  arm_linux_record_tdep.size_off_t = arm_linux_record_tdep.size_long;
+  arm_linux_record_tdep.size_stat64 = 96;
+  arm_linux_record_tdep.size_gid_t = 2;
+  arm_linux_record_tdep.size_uid_t = 2;
+  arm_linux_record_tdep.size_PAGE_SIZE = 4096;
+  arm_linux_record_tdep.size_flock64 = 24;
+  arm_linux_record_tdep.size_user_desc = 16;
+  arm_linux_record_tdep.size_io_event = 32;
+  arm_linux_record_tdep.size_iocb = 64;
+  arm_linux_record_tdep.size_epoll_event = 12;
+  arm_linux_record_tdep.size_itimerspec
+    = arm_linux_record_tdep.size_timespec * 2;
+  arm_linux_record_tdep.size_mq_attr = 32;
+  arm_linux_record_tdep.size_siginfo = 128;
+  arm_linux_record_tdep.size_termios = 36;
+  arm_linux_record_tdep.size_termios2 = 44;
+  arm_linux_record_tdep.size_pid_t = 4;
+  arm_linux_record_tdep.size_winsize = 8;
+  arm_linux_record_tdep.size_serial_struct = 60;
+  arm_linux_record_tdep.size_serial_icounter_struct = 80;
+  arm_linux_record_tdep.size_hayes_esp_config = 12;
+  arm_linux_record_tdep.size_size_t = 4;
+  arm_linux_record_tdep.size_iovec = 8;
+
+  /* These values are the second argument of system call "sys_ioctl".
+     They are obtained from Linux Kernel source.  */
+  arm_linux_record_tdep.ioctl_TCGETS = 0x5401;
+  arm_linux_record_tdep.ioctl_TCSETS = 0x5402;
+  arm_linux_record_tdep.ioctl_TCSETSW = 0x5403;
+  arm_linux_record_tdep.ioctl_TCSETSF = 0x5404;
+  arm_linux_record_tdep.ioctl_TCGETA = 0x5405;
+  arm_linux_record_tdep.ioctl_TCSETA = 0x5406;
+  arm_linux_record_tdep.ioctl_TCSETAW = 0x5407;
+  arm_linux_record_tdep.ioctl_TCSETAF = 0x5408;
+  arm_linux_record_tdep.ioctl_TCSBRK = 0x5409;
+  arm_linux_record_tdep.ioctl_TCXONC = 0x540a;
+  arm_linux_record_tdep.ioctl_TCFLSH = 0x540b;
+  arm_linux_record_tdep.ioctl_TIOCEXCL = 0x540c;
+  arm_linux_record_tdep.ioctl_TIOCNXCL = 0x540d;
+  arm_linux_record_tdep.ioctl_TIOCSCTTY = 0x540e;
+  arm_linux_record_tdep.ioctl_TIOCGPGRP = 0x540f;
+  arm_linux_record_tdep.ioctl_TIOCSPGRP = 0x5410;
+  arm_linux_record_tdep.ioctl_TIOCOUTQ = 0x5411;
+  arm_linux_record_tdep.ioctl_TIOCSTI = 0x5412;
+  arm_linux_record_tdep.ioctl_TIOCGWINSZ = 0x5413;
+  arm_linux_record_tdep.ioctl_TIOCSWINSZ = 0x5414;
+  arm_linux_record_tdep.ioctl_TIOCMGET = 0x5415;
+  arm_linux_record_tdep.ioctl_TIOCMBIS = 0x5416;
+  arm_linux_record_tdep.ioctl_TIOCMBIC = 0x5417;
+  arm_linux_record_tdep.ioctl_TIOCMSET = 0x5418;
+  arm_linux_record_tdep.ioctl_TIOCGSOFTCAR = 0x5419;
+  arm_linux_record_tdep.ioctl_TIOCSSOFTCAR = 0x541a;
+  arm_linux_record_tdep.ioctl_FIONREAD = 0x541b;
+  arm_linux_record_tdep.ioctl_TIOCINQ = arm_linux_record_tdep.ioctl_FIONREAD;
+  arm_linux_record_tdep.ioctl_TIOCLINUX = 0x541c;
+  arm_linux_record_tdep.ioctl_TIOCCONS = 0x541d;
+  arm_linux_record_tdep.ioctl_TIOCGSERIAL = 0x541e;
+  arm_linux_record_tdep.ioctl_TIOCSSERIAL = 0x541f;
+  arm_linux_record_tdep.ioctl_TIOCPKT = 0x5420;
+  arm_linux_record_tdep.ioctl_FIONBIO = 0x5421;
+  arm_linux_record_tdep.ioctl_TIOCNOTTY = 0x5422;
+  arm_linux_record_tdep.ioctl_TIOCSETD = 0x5423;
+  arm_linux_record_tdep.ioctl_TIOCGETD = 0x5424;
+  arm_linux_record_tdep.ioctl_TCSBRKP = 0x5425;
+  arm_linux_record_tdep.ioctl_TIOCTTYGSTRUCT = 0x5426;
+  arm_linux_record_tdep.ioctl_TIOCSBRK = 0x5427;
+  arm_linux_record_tdep.ioctl_TIOCCBRK = 0x5428;
+  arm_linux_record_tdep.ioctl_TIOCGSID = 0x5429;
+  arm_linux_record_tdep.ioctl_TCGETS2 = 0x802c542a;
+  arm_linux_record_tdep.ioctl_TCSETS2 = 0x402c542b;
+  arm_linux_record_tdep.ioctl_TCSETSW2 = 0x402c542c;
+  arm_linux_record_tdep.ioctl_TCSETSF2 = 0x402c542d;
+  arm_linux_record_tdep.ioctl_TIOCGPTN = 0x80045430;
+  arm_linux_record_tdep.ioctl_TIOCSPTLCK = 0x40045431;
+  arm_linux_record_tdep.ioctl_FIONCLEX = 0x5450;
+  arm_linux_record_tdep.ioctl_FIOCLEX = 0x5451;
+  arm_linux_record_tdep.ioctl_FIOASYNC = 0x5452;
+  arm_linux_record_tdep.ioctl_TIOCSERCONFIG = 0x5453;
+  arm_linux_record_tdep.ioctl_TIOCSERGWILD = 0x5454;
+  arm_linux_record_tdep.ioctl_TIOCSERSWILD = 0x5455;
+  arm_linux_record_tdep.ioctl_TIOCGLCKTRMIOS = 0x5456;
+  arm_linux_record_tdep.ioctl_TIOCSLCKTRMIOS = 0x5457;
+  arm_linux_record_tdep.ioctl_TIOCSERGSTRUCT = 0x5458;
+  arm_linux_record_tdep.ioctl_TIOCSERGETLSR = 0x5459;
+  arm_linux_record_tdep.ioctl_TIOCSERGETMULTI = 0x545a;
+  arm_linux_record_tdep.ioctl_TIOCSERSETMULTI = 0x545b;
+  arm_linux_record_tdep.ioctl_TIOCMIWAIT = 0x545c;
+  arm_linux_record_tdep.ioctl_TIOCGICOUNT = 0x545d;
+  arm_linux_record_tdep.ioctl_TIOCGHAYESESP = 0x545e;
+  arm_linux_record_tdep.ioctl_TIOCSHAYESESP = 0x545f;
+  arm_linux_record_tdep.ioctl_FIOQSIZE = 0x5460;
+
+  /* These values are the second argument of system call "sys_fcntl"
+     and "sys_fcntl64".  They are obtained from Linux Kernel source.  */
+  arm_linux_record_tdep.fcntl_F_GETLK = 5;
+  arm_linux_record_tdep.fcntl_F_GETLK64 = 12;
+  arm_linux_record_tdep.fcntl_F_SETLK64 = 13;
+  arm_linux_record_tdep.fcntl_F_SETLKW64 = 14;
+
+  arm_linux_record_tdep.arg1 = ARM_A1_REGNUM + 1;
+  arm_linux_record_tdep.arg2 = ARM_A1_REGNUM + 2;
+  arm_linux_record_tdep.arg3 = ARM_A1_REGNUM + 3;
+  arm_linux_record_tdep.arg4 = ARM_A1_REGNUM + 3;
 }
 
 /* Provide a prototype to silence -Wmissing-prototypes.  */

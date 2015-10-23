@@ -1,6 +1,6 @@
 /* BSD user-level threads support.
 
-   Copyright (C) 2005, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2005-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -93,7 +93,7 @@ bsd_uthread_set_collect_uthread (struct gdbarch *gdbarch,
 static void
 bsd_uthread_check_magic (CORE_ADDR addr)
 {
-  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch);
+  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch ());
   ULONGEST magic = read_memory_unsigned_integer (addr, 4, byte_order);
 
   if (magic != BSD_UTHREAD_PTHREAD_MAGIC)
@@ -104,7 +104,7 @@ bsd_uthread_check_magic (CORE_ADDR addr)
 #define BSD_UTHREAD_PS_RUNNING	0
 #define BSD_UTHREAD_PS_DEAD	18
 
-/* Address of the pointer to the the thread structure for the running
+/* Address of the pointer to the thread structure for the running
    thread.  */
 static CORE_ADDR bsd_uthread_thread_run_addr;
 
@@ -125,11 +125,11 @@ static int bsd_uthread_active;
 static CORE_ADDR
 bsd_uthread_lookup_address (const char *name, struct objfile *objfile)
 {
-  struct minimal_symbol *sym;
+  struct bound_minimal_symbol sym;
 
   sym = lookup_minimal_symbol (name, NULL, objfile);
-  if (sym)
-    return SYMBOL_VALUE_ADDRESS (sym);
+  if (sym.minsym)
+    return BMSYMBOL_VALUE_ADDRESS (sym);
 
   return 0;
 }
@@ -137,7 +137,7 @@ bsd_uthread_lookup_address (const char *name, struct objfile *objfile)
 static int
 bsd_uthread_lookup_offset (const char *name, struct objfile *objfile)
 {
-  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch);
+  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch ());
   CORE_ADDR addr;
 
   addr = bsd_uthread_lookup_address (name, objfile);
@@ -150,7 +150,7 @@ bsd_uthread_lookup_offset (const char *name, struct objfile *objfile)
 static CORE_ADDR
 bsd_uthread_read_memory_address (CORE_ADDR addr)
 {
-  struct type *ptr_type = builtin_type (target_gdbarch)->builtin_data_ptr;
+  struct type *ptr_type = builtin_type (target_gdbarch ())->builtin_data_ptr;
   return read_memory_typed_address (addr, ptr_type);
 }
 
@@ -161,7 +161,7 @@ bsd_uthread_read_memory_address (CORE_ADDR addr)
 static int
 bsd_uthread_activate (struct objfile *objfile)
 {
-  struct gdbarch *gdbarch = target_gdbarch;
+  struct gdbarch *gdbarch = target_gdbarch ();
   struct bsd_uthread_ops *ops = gdbarch_data (gdbarch, bsd_uthread_data);
 
   /* Skip if the thread stratum has already been activated.  */
@@ -204,7 +204,7 @@ bsd_uthread_activate (struct objfile *objfile)
 /* Cleanup due to deactivation.  */
 
 static void
-bsd_uthread_close (int quitting)
+bsd_uthread_close (struct target_ops *self)
 {
   bsd_uthread_active = 0;
   bsd_uthread_thread_run_addr = 0;
@@ -331,25 +331,11 @@ bsd_uthread_store_registers (struct target_ops *ops,
     }
 }
 
-/* FIXME: This function is only there because otherwise GDB tries to
-   invoke deprecate_xfer_memory.  */
-
-static LONGEST
-bsd_uthread_xfer_partial (struct target_ops *ops, enum target_object object,
-			  const char *annex, gdb_byte *readbuf,
-			  const gdb_byte *writebuf,
-			  ULONGEST offset, LONGEST len)
-{
-  gdb_assert (ops->beneath->to_xfer_partial);
-  return ops->beneath->to_xfer_partial (ops->beneath, object, annex, readbuf,
-					writebuf, offset, len);
-}
-
 static ptid_t
 bsd_uthread_wait (struct target_ops *ops,
 		  ptid_t ptid, struct target_waitstatus *status, int options)
 {
-  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch);
+  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch ());
   CORE_ADDR addr;
   struct target_ops *beneath = find_target_beneath (ops);
 
@@ -397,7 +383,7 @@ bsd_uthread_wait (struct target_ops *ops,
 
 static void
 bsd_uthread_resume (struct target_ops *ops,
-		    ptid_t ptid, int step, enum target_signal sig)
+		    ptid_t ptid, int step, enum gdb_signal sig)
 {
   /* Pass the request to the layer beneath.  */
   struct target_ops *beneath = find_target_beneath (ops);
@@ -407,7 +393,7 @@ bsd_uthread_resume (struct target_ops *ops,
 static int
 bsd_uthread_thread_alive (struct target_ops *ops, ptid_t ptid)
 {
-  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch);
+  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch ());
   struct target_ops *beneath = find_target_beneath (ops);
   CORE_ADDR addr = ptid_get_tid (inferior_ptid);
 
@@ -482,9 +468,10 @@ static char *bsd_uthread_state[] =
    INFO.  */
 
 static char *
-bsd_uthread_extra_thread_info (struct thread_info *info)
+bsd_uthread_extra_thread_info (struct target_ops *self,
+			       struct thread_info *info)
 {
-  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch);
+  enum bfd_endian byte_order = gdbarch_byte_order (target_gdbarch ());
   CORE_ADDR addr = ptid_get_tid (info->ptid);
 
   if (addr != 0)
@@ -518,7 +505,7 @@ bsd_uthread_pid_to_str (struct target_ops *ops, ptid_t ptid)
 static struct target_ops *
 bsd_uthread_target (void)
 {
-  struct target_ops *t = XZALLOC (struct target_ops);
+  struct target_ops *t = XCNEW (struct target_ops);
 
   t->to_shortname = "bsd-uthreads";
   t->to_longname = "BSD user-level threads";
@@ -527,7 +514,6 @@ bsd_uthread_target (void)
   t->to_mourn_inferior = bsd_uthread_mourn_inferior;
   t->to_fetch_registers = bsd_uthread_fetch_registers;
   t->to_store_registers = bsd_uthread_store_registers;
-  t->to_xfer_partial = bsd_uthread_xfer_partial;
   t->to_wait = bsd_uthread_wait;
   t->to_resume = bsd_uthread_resume;
   t->to_thread_alive = bsd_uthread_thread_alive;
@@ -547,7 +533,7 @@ extern initialize_file_ftype _initialize_bsd_uthread;
 void
 _initialize_bsd_uthread (void)
 {
-  add_target (bsd_uthread_target ());
+  complete_target_initialization (bsd_uthread_target ());
 
   bsd_uthread_data = gdbarch_data_register_pre_init (bsd_uthread_init);
 

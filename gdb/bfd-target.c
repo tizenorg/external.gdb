@@ -1,7 +1,6 @@
 /* Very simple "bfd" target, for GDB, the GNU debugger.
 
-   Copyright (C) 2003, 2005, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2003-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -22,6 +21,7 @@
 #include "target.h"
 #include "bfd-target.h"
 #include "exec.h"
+#include "gdb_bfd.h"
 
 /* The object that is stored in the target_ops->to_data field has this
    type.  */
@@ -36,12 +36,13 @@ struct target_bfd_data
   struct target_section_table table;
 };
 
-static LONGEST
+static enum target_xfer_status
 target_bfd_xfer_partial (struct target_ops *ops,
 			 enum target_object object,
 			 const char *annex, gdb_byte *readbuf,
 			 const gdb_byte *writebuf,
-			 ULONGEST offset, LONGEST len)
+			 ULONGEST offset, ULONGEST len,
+			 ULONGEST *xfered_len)
 {
   switch (object)
     {
@@ -49,13 +50,13 @@ target_bfd_xfer_partial (struct target_ops *ops,
       {
 	struct target_bfd_data *data = ops->to_data;
 	return section_table_xfer_memory_partial (readbuf, writebuf,
-						  offset, len,
+						  offset, len, xfered_len,
 						  data->table.sections,
 						  data->table.sections_end,
 						  NULL);
       }
     default:
-      return -1;
+      return TARGET_XFER_E_IO;
     }
 }
 
@@ -67,27 +68,28 @@ target_bfd_get_section_table (struct target_ops *ops)
 }
 
 static void
-target_bfd_xclose (struct target_ops *t, int quitting)
+target_bfd_xclose (struct target_ops *t)
 {
   struct target_bfd_data *data = t->to_data;
 
-  bfd_close (data->bfd);
+  gdb_bfd_unref (data->bfd);
   xfree (data->table.sections);
   xfree (data);
   xfree (t);
 }
 
 struct target_ops *
-target_bfd_reopen (struct bfd *bfd)
+target_bfd_reopen (struct bfd *abfd)
 {
   struct target_ops *t;
   struct target_bfd_data *data;
 
-  data = XZALLOC (struct target_bfd_data);
-  data->bfd = bfd;
-  build_section_table (bfd, &data->table.sections, &data->table.sections_end);
+  data = XCNEW (struct target_bfd_data);
+  data->bfd = abfd;
+  gdb_bfd_ref (abfd);
+  build_section_table (abfd, &data->table.sections, &data->table.sections_end);
 
-  t = XZALLOC (struct target_ops);
+  t = XCNEW (struct target_ops);
   t->to_shortname = "bfd";
   t->to_longname = _("BFD backed target");
   t->to_doc = _("You should never see this");
@@ -95,6 +97,7 @@ target_bfd_reopen (struct bfd *bfd)
   t->to_xfer_partial = target_bfd_xfer_partial;
   t->to_xclose = target_bfd_xclose;
   t->to_data = data;
+  t->to_magic = OPS_MAGIC;
 
   return t;
 }

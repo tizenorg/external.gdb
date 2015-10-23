@@ -1,6 +1,6 @@
 /* Misc. low level support for i386.
 
-   Copyright (C) 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 2009-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -29,7 +29,6 @@
    counts, and allow to watch regions up to 16 bytes long
    (32 bytes on 64 bit hosts).  */
 
-
 /* Debug registers' indices.  */
 #define DR_FIRSTADDR 0
 #define DR_LASTADDR  3
@@ -42,7 +41,10 @@
 struct i386_debug_reg_state
 {
   /* Mirror the inferior's DRi registers.  We keep the status and
-     control registers separated because they don't hold addresses.  */
+     control registers separated because they don't hold addresses.
+     Note that since we can change these mirrors while threads are
+     running, we never trust them to explain a cause of a trap.
+     For that, we need to peek directly in the inferior registers.  */
   CORE_ADDR dr_mirror[DR_NADDR];
   unsigned dr_status_mirror, dr_control_mirror;
 
@@ -55,16 +57,18 @@ extern void i386_low_init_dregs (struct i386_debug_reg_state *state);
 
 /* Insert a watchpoint to watch a memory region which starts at
    address ADDR and whose length is LEN bytes.  Watch memory accesses
-   of the type TYPE_FROM_PACKET.  Return 0 on success, -1 on failure.  */
+   of the type TYPE.  Return 0 on success, -1 on failure.  */
 extern int i386_low_insert_watchpoint (struct i386_debug_reg_state *state,
-				       char type_from_packet, CORE_ADDR addr,
+				       enum target_hw_bp_type type,
+				       CORE_ADDR addr,
 				       int len);
 
 /* Remove a watchpoint that watched the memory region which starts at
    address ADDR, whose length is LEN bytes, and for accesses of the
-   type TYPE_FROM_PACKET.  Return 0 on success, -1 on failure.  */
+   type TYPE.  Return 0 on success, -1 on failure.  */
 extern int i386_low_remove_watchpoint (struct i386_debug_reg_state *state,
-				       char type_from_packet, CORE_ADDR addr,
+				       enum target_hw_bp_type type,
+				       CORE_ADDR addr,
 				       int len);
 
 /* Return non-zero if we can watch a memory region that starts at
@@ -100,9 +104,14 @@ extern int i386_low_stopped_by_watchpoint (struct i386_debug_reg_state *state);
 extern void i386_dr_low_set_addr (const struct i386_debug_reg_state *state,
 				  int regnum);
 
+/* Return the inferior's debug register REGNUM.  */
+extern CORE_ADDR i386_dr_low_get_addr (int regnum);
+
 /* Update the inferior's DR7 debug control register from STATE.  */
 extern void i386_dr_low_set_control (const struct i386_debug_reg_state *state);
 
-/* Get the value of the inferior's DR6 debug status register
-   and record it in STATE.  */
-extern void i386_dr_low_get_status (struct i386_debug_reg_state *state);
+/* Return the value of the inferior's DR7 debug control register.  */
+extern unsigned i386_dr_low_get_control (void);
+
+/* Return the value of the inferior's DR6 debug status register.  */
+extern unsigned i386_dr_low_get_status (void);

@@ -1,5 +1,4 @@
-/* Copyright 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+/* Copyright (C) 2007-2014 Free Software Foundation, Inc.
 
    This file is part of the GNU opcodes library.
 
@@ -43,11 +42,11 @@ typedef struct initializer
 static initializer cpu_flag_init[] =
 {
   { "CPU_UNKNOWN_FLAGS",
-    "~CpuL1OM" },
+    "~(CpuL1OM|CpuK1OM)" },
   { "CPU_GENERIC32_FLAGS",
     "Cpu186|Cpu286|Cpu386" },
-  { "CPU_GENERIC64_FLAGS", 
-    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuClflush|Cpu387|Cpu687|CpuMMX|CpuSSE|CpuSSE2|CpuLM" },
+  { "CPU_GENERIC64_FLAGS",
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuClflush|Cpu387|Cpu687|CpuNop|CpuMMX|CpuSSE|CpuSSE2|CpuLM" },
   { "CPU_NONE_FLAGS",
    "0" },
   { "CPU_I186_FLAGS",
@@ -62,32 +61,44 @@ static initializer cpu_flag_init[] =
     "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu387" },
   { "CPU_I686_FLAGS",
     "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|Cpu387|Cpu687" },
+  { "CPU_PENTIUMPRO_FLAGS",
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|Cpu387|Cpu687|CpuNop" },
   { "CPU_P2_FLAGS",
-    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|Cpu387|Cpu687|CpuMMX" },
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|Cpu387|Cpu687|CpuNop|CpuMMX" },
   { "CPU_P3_FLAGS",
-    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|Cpu387|Cpu687|CpuMMX|CpuSSE" },
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|Cpu387|Cpu687|CpuNop|CpuMMX|CpuSSE" },
   { "CPU_P4_FLAGS",
-    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuClflush|Cpu387|Cpu687|CpuMMX|CpuSSE|CpuSSE2" },
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuClflush|Cpu387|Cpu687|CpuNop|CpuMMX|CpuSSE|CpuSSE2" },
   { "CPU_NOCONA_FLAGS",
-    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuClflush|Cpu387|Cpu687|CpuFISTTP|CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuLM" },
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuClflush|Cpu387|Cpu687|CpuFISTTP|CpuNop|CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuLM|CpuCX16" },
   { "CPU_CORE_FLAGS",
-    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuClflush|Cpu387|Cpu687|CpuFISTTP|CpuMMX|CpuSSE|CpuSSE2|CpuSSE3" },
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuClflush|Cpu387|Cpu687|CpuFISTTP|CpuNop|CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuCX16" },
   { "CPU_CORE2_FLAGS",
-    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuClflush|Cpu387|Cpu687|CpuFISTTP|CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSSE3|CpuLM" },
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuClflush|Cpu387|Cpu687|CpuFISTTP|CpuNop|CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSSE3|CpuLM|CpuCX16" },
   { "CPU_COREI7_FLAGS",
-    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuClflush|Cpu387|Cpu687|CpuFISTTP|CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSSE3|CpuSSE4_1|CpuSSE4_2|CpuRdtscp|CpuLM" },
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuClflush|Cpu387|Cpu687|CpuFISTTP|CpuNop|CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSSE3|CpuSSE4_1|CpuSSE4_2|CpuRdtscp|CpuLM|CpuCX16" },
   { "CPU_K6_FLAGS",
     "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|CpuSYSCALL|Cpu387|CpuMMX" },
   { "CPU_K6_2_FLAGS",
     "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|CpuSYSCALL|Cpu387|CpuMMX|Cpu3dnow" },
   { "CPU_ATHLON_FLAGS",
-    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuSYSCALL|Cpu387|Cpu687|CpuMMX|Cpu3dnow|Cpu3dnowA" },
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuSYSCALL|Cpu387|Cpu687|CpuNop|CpuMMX|Cpu3dnow|Cpu3dnowA" },
   { "CPU_K8_FLAGS",
-    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuSYSCALL|CpuRdtscp|Cpu387|Cpu687|CpuMMX|Cpu3dnow|Cpu3dnowA|CpuSSE|CpuSSE2|CpuLM" },
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuSYSCALL|CpuRdtscp|Cpu387|Cpu687|CpuNop|CpuMMX|Cpu3dnow|Cpu3dnowA|CpuSSE|CpuSSE2|CpuLM" },
   { "CPU_AMDFAM10_FLAGS",
-    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuSYSCALL|CpuRdtscp|Cpu387|Cpu687|CpuFISTTP|CpuMMX|Cpu3dnow|Cpu3dnowA|CpuSSE|CpuSSE2|CpuSSE3|CpuSSE4a|CpuABM|CpuLM" },
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuSYSCALL|CpuRdtscp|Cpu387|Cpu687|CpuFISTTP|CpuNop|CpuMMX|Cpu3dnow|Cpu3dnowA|CpuSSE|CpuSSE2|CpuSSE3|CpuSSE4a|CpuABM|CpuLM" },
   { "CPU_BDVER1_FLAGS",
-    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuSYSCALL|CpuRdtscp|Cpu387|Cpu687|CpuFISTTP|CpuMMX|Cpu3dnow|Cpu3dnowA|CpuSSE|CpuSSE2|CpuSSE3|CpuSSE4a|CpuABM|CpuLM|CpuFMA4|CpuXOP|CpuLWP" },
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuSYSCALL|CpuRdtscp|Cpu387|Cpu687|CpuFISTTP|CpuNop|CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSE4a|CpuABM|CpuLM|CpuFMA4|CpuXOP|CpuLWP|CpuCX16|CpuClflush|CpuSSSE3|CpuSVME|CpuSSE4_1|CpuSSE4_2|CpuXsave|CpuAES|CpuAVX|CpuPCLMUL|CpuLZCNT|CpuPRFCHW" },
+  { "CPU_BDVER2_FLAGS",
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuSYSCALL|CpuRdtscp|Cpu387|Cpu687|CpuFISTTP|CpuNop|CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSE4a|CpuABM|CpuLM|CpuFMA|CpuFMA4|CpuXOP|CpuLWP|CpuBMI|CpuTBM|CpuF16C|CpuCX16|CpuClflush|CpuSSSE3|CpuSVME|CpuSSE4_1|CpuSSE4_2|CpuXsave|CpuAES|CpuAVX|CpuPCLMUL|CpuLZCNT|CpuPRFCHW" },
+  { "CPU_BDVER3_FLAGS",
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuSYSCALL|CpuRdtscp|Cpu387|Cpu687|CpuFISTTP|CpuNop|CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSE4a|CpuABM|CpuLM|CpuFMA|CpuFMA4|CpuXOP|CpuLWP|CpuBMI|CpuTBM|CpuF16C|CpuCX16|CpuClflush|CpuSSSE3|CpuSVME|CpuSSE4_1|CpuSSE4_2|CpuAES|CpuAVX|CpuPCLMUL|CpuLZCNT|CpuPRFCHW|CpuXsave|CpuXsaveopt|CpuFSGSBase" },
+  { "CPU_BDVER4_FLAGS",
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuSYSCALL|CpuRdtscp|Cpu387|Cpu687|CpuFISTTP|CpuNop|CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSE4a|CpuABM|CpuLM|CpuFMA|CpuFMA4|CpuXOP|CpuLWP|CpuBMI|CpuTBM|CpuF16C|CpuCX16|CpuClflush|CpuSSSE3|CpuSVME|CpuSSE4_1|CpuSSE4_2|CpuAES|CpuAVX|CpuPCLMUL|CpuLZCNT|CpuPRFCHW|CpuXsave|CpuXsaveopt|CpuFSGSBase|CpuAVX2|CpuMovbe|CpuBMI2|CpuRdRnd" },
+  { "CPU_BTVER1_FLAGS",
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuSYSCALL|CpuRdtscp|Cpu387|Cpu687|CpuNop|CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSSE3|CpuSSE4a|CpuABM|CpuLM|CpuPRFCHW|CpuCX16|CpuClflush|CpuFISTTP|CpuSVME|CpuLZCNT" },
+  { "CPU_BTVER2_FLAGS",
+    "Cpu186|Cpu286|Cpu386|Cpu486|Cpu586|Cpu686|CpuSYSCALL|CpuRdtscp|Cpu387|Cpu687|CpuNop|CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSSE3|CpuSSE4a|CpuSSE4_1|CpuSSE4_2|CpuABM|CpuLM|CpuBMI|CpuF16C|CpuAES|CpuPCLMUL|CpuAVX|CpuMovbe|CpuXsave|CpuXsaveopt|CpuPRFCHW|CpuCX16|CpuClflush|CpuFISTTP|CpuSVME|CpuLZCNT" },
   { "CPU_8087_FLAGS",
     "Cpu8087" },
   { "CPU_287_FLAGS",
@@ -98,6 +109,8 @@ static initializer cpu_flag_init[] =
     "Cpu8087|Cpu287|Cpu387|Cpu687|CpuFISTTP" },
   { "CPU_CLFLUSH_FLAGS",
     "CpuClflush" },
+  { "CPU_NOP_FLAGS",
+    "CpuNop" },
   { "CPU_SYSCALL_FLAGS",
     "CpuSYSCALL" },
   { "CPU_MMX_FLAGS",
@@ -115,7 +128,7 @@ static initializer cpu_flag_init[] =
   { "CPU_SSE4_2_FLAGS",
     "CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSSE3|CpuSSE4_1|CpuSSE4_2" },
   { "CPU_ANY_SSE_FLAGS",
-    "CpuSSE|CpuSSE2|CpuSSE3|CpuSSSE3|CpuSSE4_1|CpuSSE4_2|CpuSSE4a|CpuAVX" },
+    "CpuSSE|CpuSSE2|CpuSSE3|CpuSSSE3|CpuSSE4_1|CpuSSE4_2|CpuSSE4a|CpuAVX|CpuAVX2|CpuAVX512F|CpuAVX512CD|CpuAVX512ER|CpuAVX512PF" },
   { "CPU_VMX_FLAGS",
     "CpuVMX" },
   { "CPU_SMX_FLAGS",
@@ -136,8 +149,14 @@ static initializer cpu_flag_init[] =
     "CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSSE3|CpuSSE4_1|CpuSSE4_2|CpuSSE4a|CpuABM|CpuAVX|CpuFMA4|CpuXOP" },
   { "CPU_LWP_FLAGS",
     "CpuLWP" },
+  { "CPU_BMI_FLAGS",
+    "CpuBMI" },
+  { "CPU_TBM_FLAGS",
+    "CpuTBM" },
   { "CPU_MOVBE_FLAGS",
     "CpuMovbe" },
+  { "CPU_CX16_FLAGS",
+    "CpuCX16" },
   { "CPU_RDTSCP_FLAGS",
     "CpuRdtscp" },
   { "CPU_EPT_FLAGS",
@@ -148,6 +167,18 @@ static initializer cpu_flag_init[] =
     "CpuRdRnd" },
   { "CPU_F16C_FLAGS",
     "CpuF16C" },
+  { "CPU_BMI2_FLAGS",
+    "CpuBMI2" },
+  { "CPU_LZCNT_FLAGS",
+    "CpuLZCNT" },
+  { "CPU_HLE_FLAGS",
+    "CpuHLE" },
+  { "CPU_RTM_FLAGS",
+    "CpuRTM" },
+  { "CPU_INVPCID_FLAGS",
+    "CpuINVPCID" },
+  { "CPU_VMFUNC_FLAGS",
+    "CpuVMFUNC" },
   { "CPU_3DNOW_FLAGS",
     "CpuMMX|Cpu3dnow" },
   { "CPU_3DNOWA_FLAGS",
@@ -162,10 +193,44 @@ static initializer cpu_flag_init[] =
     "CpuABM" },
   { "CPU_AVX_FLAGS",
     "CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSSE3|CpuSSE4_1|CpuSSE4_2|CpuAVX" },
+  { "CPU_AVX2_FLAGS",
+    "CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSSE3|CpuSSE4_1|CpuSSE4_2|CpuAVX|CpuAVX2" },
+  { "CPU_AVX512F_FLAGS",
+    "CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSSE3|CpuSSE4_1|CpuSSE4_2|CpuAVX|CpuAVX2|CpuAVX512F" },
+  { "CPU_AVX512CD_FLAGS",
+    "CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSSE3|CpuSSE4_1|CpuSSE4_2|CpuAVX|CpuAVX2|CpuAVX512F|CpuAVX512CD" },
+  { "CPU_AVX512ER_FLAGS",
+    "CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSSE3|CpuSSE4_1|CpuSSE4_2|CpuAVX|CpuAVX2|CpuAVX512F|CpuAVX512ER" },
+  { "CPU_AVX512PF_FLAGS",
+    "CpuMMX|CpuSSE|CpuSSE2|CpuSSE3|CpuSSSE3|CpuSSE4_1|CpuSSE4_2|CpuAVX|CpuAVX2|CpuAVX512F|CpuAVX512PF" },
   { "CPU_ANY_AVX_FLAGS",
-    "CpuAVX" },
+    "CpuAVX|CpuAVX2|CpuAVX512F|CpuAVX512CD|CpuAVX512ER|CpuAVX512PF" },
   { "CPU_L1OM_FLAGS",
     "unknown" },
+  { "CPU_K1OM_FLAGS",
+    "unknown" },
+  { "CPU_ADX_FLAGS",
+    "CpuADX" },
+  { "CPU_RDSEED_FLAGS",
+    "CpuRdSeed" },
+  { "CPU_PRFCHW_FLAGS",
+    "CpuPRFCHW" },
+  { "CPU_SMAP_FLAGS",
+    "CpuSMAP" },
+  { "CPU_MPX_FLAGS",
+    "CpuMPX" },
+  { "CPU_SHA_FLAGS",
+    "CpuSHA" },
+  { "CPU_CLFLUSHOPT_FLAGS",
+    "CpuClflushOpt" },
+  { "CPU_XSAVES_FLAGS",
+    "CpuXSAVES" },
+  { "CPU_XSAVEC_FLAGS",
+    "CpuXSAVEC" },
+  { "CPU_PREFETCHWT1_FLAGS",
+    "CpuPREFETCHWT1" },
+  { "CPU_SE1_FLAGS",
+    "CpuSE1" },
 };
 
 static initializer operand_type_init[] =
@@ -234,6 +299,10 @@ static initializer operand_type_init[] =
     "RegXMM" },
   { "OPERAND_TYPE_REGYMM",
     "RegYMM" },
+  { "OPERAND_TYPE_REGZMM",
+    "RegZMM" },
+  { "OPERAND_TYPE_REGMASK",
+    "RegMask" },
   { "OPERAND_TYPE_ESSEG",
     "EsSeg" },
   { "OPERAND_TYPE_ACC32",
@@ -254,6 +323,8 @@ static initializer operand_type_init[] =
     "Imm16|Imm32S" },
   { "OPERAND_TYPE_IMM16_32_32S",
     "Imm16|Imm32|Imm32S" },
+  { "OPERAND_TYPE_IMM32_64",
+    "Imm32|Imm64" },
   { "OPERAND_TYPE_IMM32_32S_DISP32",
     "Imm32|Imm32S|Disp32" },
   { "OPERAND_TYPE_IMM64_DISP64",
@@ -264,6 +335,10 @@ static initializer operand_type_init[] =
     "Imm32|Imm32S|Imm64|Disp32|Disp64" },
   { "OPERAND_TYPE_VEC_IMM4",
     "Vec_Imm4" },
+  { "OPERAND_TYPE_REGBND",
+    "RegBND" },
+  { "OPERAND_TYPE_VEC_DISP8",
+    "Vec_Disp8" },
 };
 
 typedef struct bitfield
@@ -284,6 +359,7 @@ static bitfield cpu_flags[] =
   BITFIELD (Cpu586),
   BITFIELD (Cpu686),
   BITFIELD (CpuClflush),
+  BITFIELD (CpuNop),
   BITFIELD (CpuSYSCALL),
   BITFIELD (Cpu8087),
   BITFIELD (Cpu287),
@@ -298,7 +374,13 @@ static bitfield cpu_flags[] =
   BITFIELD (CpuSSE4_1),
   BITFIELD (CpuSSE4_2),
   BITFIELD (CpuAVX),
+  BITFIELD (CpuAVX2),
+  BITFIELD (CpuAVX512F),
+  BITFIELD (CpuAVX512CD),
+  BITFIELD (CpuAVX512ER),
+  BITFIELD (CpuAVX512PF),
   BITFIELD (CpuL1OM),
+  BITFIELD (CpuK1OM),
   BITFIELD (CpuSSE4a),
   BITFIELD (Cpu3dnow),
   BITFIELD (Cpu3dnowA),
@@ -315,15 +397,36 @@ static bitfield cpu_flags[] =
   BITFIELD (CpuFMA4),
   BITFIELD (CpuXOP),
   BITFIELD (CpuLWP),
+  BITFIELD (CpuBMI),
+  BITFIELD (CpuTBM),
   BITFIELD (CpuLM),
   BITFIELD (CpuMovbe),
+  BITFIELD (CpuCX16),
   BITFIELD (CpuEPT),
   BITFIELD (CpuRdtscp),
   BITFIELD (CpuFSGSBase),
   BITFIELD (CpuRdRnd),
   BITFIELD (CpuF16C),
+  BITFIELD (CpuBMI2),
+  BITFIELD (CpuLZCNT),
+  BITFIELD (CpuHLE),
+  BITFIELD (CpuRTM),
+  BITFIELD (CpuINVPCID),
+  BITFIELD (CpuVMFUNC),
+  BITFIELD (CpuRDSEED),
+  BITFIELD (CpuADX),
+  BITFIELD (CpuPRFCHW),
+  BITFIELD (CpuSMAP),
+  BITFIELD (CpuSHA),
+  BITFIELD (CpuVREX),
+  BITFIELD (CpuClflushOpt),
+  BITFIELD (CpuXSAVES),
+  BITFIELD (CpuXSAVEC),
+  BITFIELD (CpuPREFETCHWT1),
+  BITFIELD (CpuSE1),
   BITFIELD (Cpu64),
   BITFIELD (CpuNo64),
+  BITFIELD (CpuMPX),
 #ifdef CpuUnused
   BITFIELD (CpuUnused),
 #endif
@@ -346,6 +449,7 @@ static bitfield opcode_modifiers[] =
   BITFIELD (Size16),
   BITFIELD (Size32),
   BITFIELD (Size64),
+  BITFIELD (CheckRegSize),
   BITFIELD (IgnoreSize),
   BITFIELD (DefaultSize),
   BITFIELD (No_bSuf),
@@ -356,10 +460,13 @@ static bitfield opcode_modifiers[] =
   BITFIELD (No_ldSuf),
   BITFIELD (FWait),
   BITFIELD (IsString),
+  BITFIELD (BNDPrefixOk),
   BITFIELD (IsLockable),
   BITFIELD (RegKludge),
   BITFIELD (FirstXmm0),
   BITFIELD (Implicit1stXmm0),
+  BITFIELD (RepPrefixOk),
+  BITFIELD (HLEPrefixOk),
   BITFIELD (ToDword),
   BITFIELD (ToQword),
   BITFIELD (AddrPrefixOp0),
@@ -374,8 +481,17 @@ static bitfield opcode_modifiers[] =
   BITFIELD (VexOpcode),
   BITFIELD (VexSources),
   BITFIELD (VexImmExt),
+  BITFIELD (VecSIB),
   BITFIELD (SSE2AVX),
   BITFIELD (NoAVX),
+  BITFIELD (EVex),
+  BITFIELD (Masking),
+  BITFIELD (VecESize),
+  BITFIELD (Broadcast),
+  BITFIELD (StaticRounding),
+  BITFIELD (SAE),
+  BITFIELD (Disp8MemShift),
+  BITFIELD (NoDefMask),
   BITFIELD (OldGcc),
   BITFIELD (ATTMnemonic),
   BITFIELD (ATTSyntax),
@@ -392,6 +508,8 @@ static bitfield operand_types[] =
   BITFIELD (RegMMX),
   BITFIELD (RegXMM),
   BITFIELD (RegYMM),
+  BITFIELD (RegZMM),
+  BITFIELD (RegMask),
   BITFIELD (Imm1),
   BITFIELD (Imm8),
   BITFIELD (Imm8S),
@@ -426,9 +544,12 @@ static bitfield operand_types[] =
   BITFIELD (Tbyte),
   BITFIELD (Xmmword),
   BITFIELD (Ymmword),
+  BITFIELD (Zmmword),
   BITFIELD (Unspecified),
   BITFIELD (Anysize),
   BITFIELD (Vec_Imm4),
+  BITFIELD (RegBND),
+  BITFIELD (Vec_Disp8),
 #ifdef OTUnused
   BITFIELD (OTUnused),
 #endif
@@ -448,7 +569,7 @@ static void
 fail (const char *message, ...)
 {
   va_list args;
-  
+
   va_start (args, message);
   fprintf (stderr, _("%s: Error: "), program_name);
   vfprintf (stderr, message, args);
@@ -460,8 +581,7 @@ static void
 process_copyright (FILE *fp)
 {
   fprintf (fp, "/* This file is automatically generated by i386-gen.  Do not edit!  */\n\
-/* Copyright 2007, 2008, 2009, 2010\n\
-   Free Software Foundation, Inc.\n\
+/* Copyright (C) 2007-2014 Free Software Foundation, Inc.\n\
 \n\
    This file is part of the GNU opcodes library.\n\
 \n\
@@ -526,7 +646,7 @@ next_field (char *str, char sep, char **next, char *last)
   *str = '\0';
   remove_trailing_whitespaces (p);
 
-  *next = str + 1; 
+  *next = str + 1;
 
   if (p >= last)
     abort ();
@@ -597,7 +717,10 @@ output_cpu_flags (FILE *table, bitfield *flags, unsigned int size,
 
   for (i = 0; i < size - 1; i++)
     {
-      fprintf (table, "%d, ", flags[i].value);
+      if (((i + 1) % 20) != 0)
+	fprintf (table, "%d, ", flags[i].value);
+      else
+	fprintf (table, "%d,", flags[i].value);
       if (((i + 1) % 20) == 0)
 	{
 	  /* We need \\ for macro.  */
@@ -685,7 +808,10 @@ output_opcode_modifier (FILE *table, bitfield *modifier, unsigned int size)
 
   for (i = 0; i < size - 1; i++)
     {
-      fprintf (table, "%d, ", modifier[i].value);
+      if (((i + 1) % 20) != 0)
+        fprintf (table, "%d, ", modifier[i].value);
+      else
+        fprintf (table, "%d,", modifier[i].value);
       if (((i + 1) % 20) == 0)
 	fprintf (table, "\n      ");
     }
@@ -726,12 +852,15 @@ output_operand_type (FILE *table, bitfield *types, unsigned int size,
 
   for (i = 0; i < size - 1; i++)
     {
-      fprintf (table, "%d, ", types[i].value);
+      if (((i + 1) % 20) != 0)
+	fprintf (table, "%d, ", types[i].value);
+      else
+	fprintf (table, "%d,", types[i].value);
       if (((i + 1) % 20) == 0)
 	{
 	  /* We need \\ for macro.  */
 	  if (macro)
-	    fprintf (table, "\\\n%s", indent);
+	    fprintf (table, " \\\n%s", indent);
 	  else
 	    fprintf (table, "\n%s", indent);
 	}
@@ -1015,7 +1144,7 @@ process_i386_opcodes (FILE *table)
   process_i386_cpu_flag (table, "0", 0, ",", "    ", -1);
 
   process_i386_opcode_modifier (table, "0", -1);
- 
+
   fprintf (table, "    { ");
   process_i386_operand_type (table, "0", 0, "\t  ", -1);
   fprintf (table, " } }\n");
@@ -1141,7 +1270,7 @@ process_i386_initializers (void)
 /* Program options.  */
 #define OPTION_SRCDIR	200
 
-struct option long_options[] = 
+struct option long_options[] =
 {
   {"srcdir",  required_argument, NULL, OPTION_SRCDIR},
   {"debug",   no_argument,       NULL, 'd'},
@@ -1172,7 +1301,7 @@ main (int argc, char **argv)
   char *srcdir = NULL;
   int c;
   FILE *table;
-  
+
   program_name = *argv;
   xmalloc_set_program_name (program_name);
 
@@ -1200,7 +1329,7 @@ main (int argc, char **argv)
   if (optind != argc)
     usage (stdout, 1);
 
-  if (srcdir != NULL) 
+  if (srcdir != NULL)
     if (chdir (srcdir) != 0)
       fail (_("unable to change directory to \"%s\", errno = %s\n"),
 	    srcdir, xstrerror (errno));

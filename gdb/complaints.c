@@ -1,7 +1,6 @@
 /* Support for complaint handling during symbol reading in GDB.
 
-   Copyright (C) 1990, 1991, 1992, 1993, 1995, 1998, 1999, 2000, 2002, 2004,
-   2005, 2006, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 1990-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -26,8 +25,8 @@
 
 extern void _initialize_complaints (void);
 
-/* Should each complaint message be self explanatory, or should we assume that
-   a series of complaints is being produced?  */
+/* Should each complaint message be self explanatory, or should we
+   assume that a series of complaints is being produced?  */
 
 /* case 1: First message of a series that must
    start off with explanation.  case 2: Subsequent message of a series
@@ -113,7 +112,7 @@ get_complaints (struct complaints **c)
 {
   if ((*c) != NULL)
     return (*c);
-  (*c) = XMALLOC (struct complaints);
+  (*c) = XNEW (struct complaints);
   (*c)->root = &complaint_sentinel;
   (*c)->series = ISOLATED_MESSAGE;
   (*c)->explanation = NULL;
@@ -141,7 +140,7 @@ find_complaint (struct complaints *complaints, const char *file,
     }
 
   /* Oops not seen before, fill in a new complaint.  */
-  complaint = XMALLOC (struct complain);
+  complaint = XNEW (struct complain);
   complaint->fmt = fmt;
   complaint->file = file;
   complaint->line = line;
@@ -165,11 +164,13 @@ static int stop_whining = 0;
    later handling.  */
 
 static void ATTRIBUTE_PRINTF (4, 0)
-vcomplaint (struct complaints **c, const char *file, int line, const char *fmt,
+vcomplaint (struct complaints **c, const char *file, 
+	    int line, const char *fmt,
 	    va_list args)
 {
   struct complaints *complaints = get_complaints (c);
-  struct complain *complaint = find_complaint (complaints, file, line, fmt);
+  struct complain *complaint = find_complaint (complaints, file, 
+					       line, fmt);
   enum complaint_series series;
 
   gdb_assert (complaints != NULL);
@@ -184,7 +185,8 @@ vcomplaint (struct complaints **c, const char *file, int line, const char *fmt,
     series = complaints->series;
 
   if (complaint->file != NULL)
-    internal_vwarning (complaint->file, complaint->line, complaint->fmt, args);
+    internal_vwarning (complaint->file, complaint->line, 
+		       complaint->fmt, args);
   else if (deprecated_warning_hook)
     (*deprecated_warning_hook) (complaint->fmt, args);
   else
@@ -294,7 +296,8 @@ clear_complaints (struct complaints **c, int less_verbose, int noisy)
     case SUBSEQUENT_MESSAGE:
       /* It would be really nice to use begin_line() here.
          Unfortunately that function doesn't track GDB_STDERR and
-         consequently will sometimes supress a line when it shouldn't.  */
+         consequently will sometimes supress a line when it
+         shouldn't.  */
       fputs_unfiltered ("\n", gdb_stderr);
       break;
     default:
@@ -321,7 +324,8 @@ complaints_show_value (struct ui_file *file, int from_tty,
 void
 _initialize_complaints (void)
 {
-  add_setshow_zinteger_cmd ("complaints", class_support, &stop_whining, _("\
+  add_setshow_zinteger_cmd ("complaints", class_support, 
+			    &stop_whining, _("\
 Set max number of complaints about incorrect symbols."), _("\
 Show max number of complaints about incorrect symbols."), NULL,
 			    NULL, complaints_show_value,

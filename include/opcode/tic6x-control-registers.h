@@ -1,6 +1,5 @@
 /* TI C6X control register information.
-   Copyright 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2010-2014 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -50,5 +49,7 @@ CTRL(rep, C64XP, read_write, 0xf, 0x1f)
 CTRL(rilc, C64XP, read_write, 0xe, 0x1f)
 CTRL(ssr, C64XP, read_write, 0x15, 0x1f)
 CTRL(tsch, C64XP, read, 0xb, 0x1f)
-CTRL(tscl, C64XP, read, 0xa, 0x1f)
+/* Contrary to Table 3-26 in SPRUFE8, this register is read-write, as
+   documented in section 2.9.13.  */
+CTRL(tscl, C64XP, read_write, 0xa, 0x1f)
 CTRL(tsr, C64XP, read_write, 0x1a, 0x1f)

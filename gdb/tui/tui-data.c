@@ -1,7 +1,6 @@
 /* TUI data manipulation routines.
 
-   Copyright (C) 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2006, 2007, 2008,
-   2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 1998-2014 Free Software Foundation, Inc.
 
    Contributed by Hewlett-Packard Company.
 
@@ -26,7 +25,7 @@
 #include "tui/tui-data.h"
 #include "tui/tui-wingeneral.h"
 
-#include "gdb_string.h"
+#include <string.h>
 #include "gdb_curses.h"
 
 /****************************
@@ -312,16 +311,6 @@ tui_set_current_layout_to (enum tui_layout_type new_layout)
 }
 
 
-/* Set the origin of the window.  */
-void
-set_gen_win_origin (struct tui_gen_win_info *win_info, 
-		    int x, int y)
-{
-  win_info->origin.x = x;
-  win_info->origin.y = y;
-}
-
-
 /*****************************
 ** OTHER PUBLIC FUNCTIONS
 *****************************/
@@ -458,7 +447,7 @@ tui_alloc_generic_win_info (void)
 {
   struct tui_gen_win_info *win;
 
-  if ((win = XMALLOC (struct tui_gen_win_info)) != NULL)
+  if ((win = XNEW (struct tui_gen_win_info)) != NULL)
     tui_init_generic_part (win);
 
   return win;
@@ -503,7 +492,8 @@ init_content_element (struct tui_win_element *element,
     case DATA_WIN:
       tui_init_generic_part (&element->which_element.data_window);
       element->which_element.data_window.type = DATA_ITEM_WIN;
-      ((struct tui_gen_win_info *) & element->which_element.data_window)->content =
+      ((struct tui_gen_win_info *)
+       &element->which_element.data_window)->content =
 	(void **) tui_alloc_content (1, DATA_ITEM_WIN);
       ((struct tui_gen_win_info *)
        & element->which_element.data_window)->content_size = 1;
@@ -520,7 +510,7 @@ init_content_element (struct tui_win_element *element,
       element->which_element.data.content = (char*) NULL;
       break;
     case LOCATOR_WIN:
-      element->which_element.locator.file_name[0] =
+      element->which_element.locator.full_name[0] =
 	element->which_element.locator.proc_name[0] = (char) 0;
       element->which_element.locator.line_no = 0;
       element->which_element.locator.addr = 0;
@@ -544,13 +534,14 @@ init_win_info (struct tui_win_info *win_info)
     {
     case SRC_WIN:
     case DISASSEM_WIN:
-      win_info->detail.source_info.execution_info = (struct tui_gen_win_info *) NULL;
+      win_info->detail.source_info.execution_info
+	= (struct tui_gen_win_info *) NULL;
       win_info->detail.source_info.has_locator = FALSE;
       win_info->detail.source_info.horizontal_offset = 0;
       win_info->detail.source_info.gdbarch = NULL;
       win_info->detail.source_info.start_line_or_addr.loa = LOA_ADDRESS;
       win_info->detail.source_info.start_line_or_addr.u.addr = 0;
-      win_info->detail.source_info.filename = 0;
+      win_info->detail.source_info.fullname = NULL;
       break;
     case DATA_WIN:
       win_info->detail.data_display_info.data_content = (tui_win_content) NULL;
@@ -579,7 +570,7 @@ tui_alloc_win_info (enum tui_win_type type)
 {
   struct tui_win_info *win_info;
 
-  win_info = XMALLOC (struct tui_win_info);
+  win_info = XNEW (struct tui_win_info);
   if (win_info != NULL)
     {
       win_info->generic.type = type;
@@ -646,7 +637,8 @@ tui_add_content_elements (struct tui_gen_win_info *win_info,
 
   if (win_info->content == NULL)
     {
-      win_info->content = (void **) tui_alloc_content (num_elements, win_info->type);
+      win_info->content = (void **) tui_alloc_content (num_elements,
+						       win_info->type);
       index_start = 0;
     }
   else
@@ -655,7 +647,7 @@ tui_add_content_elements (struct tui_gen_win_info *win_info,
     {
       for (i = index_start; (i < num_elements + index_start); i++)
 	{
-	  if ((element_ptr = XMALLOC (struct tui_win_element)) != NULL)
+	  if ((element_ptr = XNEW (struct tui_win_element)) != NULL)
 	    {
 	      win_info->content[i] = (void *) element_ptr;
 	      init_content_element (element_ptr, win_info->type);
@@ -689,10 +681,10 @@ tui_del_window (struct tui_win_info *win_info)
 	  generic_win->handle = (WINDOW *) NULL;
 	  generic_win->is_visible = FALSE;
 	}
-      if (win_info->detail.source_info.filename)
+      if (win_info->detail.source_info.fullname)
         {
-          xfree (win_info->detail.source_info.filename);
-          win_info->detail.source_info.filename = 0;
+          xfree (win_info->detail.source_info.fullname);
+          win_info->detail.source_info.fullname = NULL;
         }
       generic_win = win_info->detail.source_info.execution_info;
       if (generic_win != (struct tui_gen_win_info *) NULL)
@@ -739,10 +731,10 @@ tui_free_window (struct tui_win_info *win_info)
 	  generic_win->handle = (WINDOW *) NULL;
 	}
       tui_free_win_content (generic_win);
-      if (win_info->detail.source_info.filename)
+      if (win_info->detail.source_info.fullname)
         {
-          xfree (win_info->detail.source_info.filename);
-          win_info->detail.source_info.filename = 0;
+          xfree (win_info->detail.source_info.fullname);
+          win_info->detail.source_info.fullname = NULL;
         }
       generic_win = win_info->detail.source_info.execution_info;
       if (generic_win != (struct tui_gen_win_info *) NULL)
@@ -831,7 +823,8 @@ tui_del_data_windows (tui_win_content content,
      element.  */
   for (i = 0; i < content_size; i++)
     {
-      struct tui_gen_win_info *generic_win = &content[i]->which_element.data_window;
+      struct tui_gen_win_info *generic_win
+	= &content[i]->which_element.data_window;
 
       if (generic_win != (struct tui_gen_win_info *) NULL)
 	{
@@ -854,7 +847,8 @@ tui_free_data_content (tui_win_content content,
      element.  */
   for (i = 0; i < content_size; i++)
     {
-      struct tui_gen_win_info *generic_win = &content[i]->which_element.data_window;
+      struct tui_gen_win_info *generic_win
+	= &content[i]->which_element.data_window;
 
       if (generic_win != (struct tui_gen_win_info *) NULL)
 	{

@@ -1,6 +1,5 @@
 /* FLEX lexer for Ada expressions, for GDB.
-   Copyright (C) 1994, 1997, 1998, 2000, 2001, 2002, 2003, 2007, 2008, 2009,
-   2010 Free Software Foundation, Inc.
+   Copyright (C) 1994-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -49,11 +48,13 @@ POSEXP  (e"+"?{NUM10})
 static char numbuf[NUMERAL_WIDTH];
  static void canonicalizeNumeral (char *s1, const char *);
 static struct stoken processString (const char*, int);
-static int processInt (const char *, const char *, const char *);
-static int processReal (const char *);
+static int processInt (struct parser_state *, const char *, const char *,
+		       const char *);
+static int processReal (struct parser_state *, const char *);
 static struct stoken processId (const char *, int);
 static int processAttribute (const char *);
 static int find_dot_all (const char *);
+static void rewind_to_char (int);
 
 #undef YY_DECL
 #define YY_DECL static int yylex ( void )
@@ -89,40 +90,42 @@ static int find_dot_all (const char *);
 
 {NUM10}{POSEXP}  {
 		   canonicalizeNumeral (numbuf, yytext);
-		   return processInt (NULL, numbuf, strrchr(numbuf, 'e')+1);
+		   return processInt (pstate, NULL, numbuf,
+				      strrchr (numbuf, 'e') + 1);
 		 }
 
 {NUM10}          {
 		   canonicalizeNumeral (numbuf, yytext);
-		   return processInt (NULL, numbuf, NULL);
+		   return processInt (pstate, NULL, numbuf, NULL);
 		 }
 
 {NUM10}"#"{HEXDIG}({HEXDIG}|_)*"#"{POSEXP} {
 		   canonicalizeNumeral (numbuf, yytext);
-    		   return processInt (numbuf,
+		   return processInt (pstate, numbuf,
 				      strchr (numbuf, '#') + 1,
 				      strrchr(numbuf, '#') + 1);
 		 }
 
 {NUM10}"#"{HEXDIG}({HEXDIG}|_)*"#" {
 		   canonicalizeNumeral (numbuf, yytext);
-    		   return processInt (numbuf, strchr (numbuf, '#') + 1, NULL);
+		   return processInt (pstate, numbuf, strchr (numbuf, '#') + 1,
+				      NULL);
 		 }
 
 "0x"{HEXDIG}+	{
 		  canonicalizeNumeral (numbuf, yytext+2);
-		  return processInt ("16#", numbuf, NULL);
+		  return processInt (pstate, "16#", numbuf, NULL);
 		}
 
 
 {NUM10}"."{NUM10}{EXP} {
 		   canonicalizeNumeral (numbuf, yytext);
-		   return processReal (numbuf);
+		   return processReal (pstate, numbuf);
 		}
 
 {NUM10}"."{NUM10} {
 		   canonicalizeNumeral (numbuf, yytext);
-		   return processReal (numbuf);
+		   return processReal (pstate, numbuf);
 		}
 
 {NUM10}"#"{NUM16}"."{NUM16}"#"{EXP} {
@@ -134,14 +137,14 @@ static int find_dot_all (const char *);
 		}
 
 <INITIAL>"'"({GRAPHIC}|\")"'" {
-		   yylval.typed_val.type = type_char ();
+		   yylval.typed_val.type = type_char (pstate);
 		   yylval.typed_val.val = yytext[1];
 		   return CHARLIT;
 		}
 
 <INITIAL>"'[\""{HEXDIG}{2}"\"]'"   {
                    int v;
-                   yylval.typed_val.type = type_char ();
+                   yylval.typed_val.type = type_char (pstate);
 		   sscanf (yytext+3, "%2x", &v);
 		   yylval.typed_val.val = v;
 		   return CHARLIT;
@@ -158,18 +161,19 @@ static int find_dot_all (const char *);
 
 
 if		{
-		  while (*lexptr != 'i' && *lexptr != 'I')
-		    lexptr -= 1;
-		  yyrestart(NULL);
+                  rewind_to_char ('i');
 		  return 0;
 		}
 
-(task|thread)	{
+task            {
+                  rewind_to_char ('t');
+		  return 0;
+		}
+
+thread{WHITE}+{DIG} {
                   /* This keyword signals the end of the expression and
                      will be processed separately.  */
-		  while (*lexptr != 't' && *lexptr != 'T')
-		    lexptr--;
-		  yyrestart(NULL);
+                  rewind_to_char ('t');
 		  return 0;
 		}
 
@@ -219,8 +223,7 @@ false		{ return FALSEKEYWORD; }
 
 ","		{ if (paren_depth == 0 && comma_terminates)
 		    {
-		      lexptr -= 1;
-		      yyrestart(NULL);
+		      rewind_to_char (',');
 		      return 0;
 		    }
 		  else
@@ -230,8 +233,7 @@ false		{ return FALSEKEYWORD; }
 "("		{ paren_depth += 1; return '('; }
 ")"		{ if (paren_depth == 0)
 		    {
-		      lexptr -= 1;
-		      yyrestart(NULL);
+		      rewind_to_char (')');
 		      return 0;
 		    }
 		  else
@@ -289,11 +291,11 @@ false		{ return FALSEKEYWORD; }
 %%
 
 #include <ctype.h>
-#include "gdb_string.h"
+#include <string.h>
 
 /* Initialize the lexer for processing new expression. */
 
-void
+static void
 lexer_init (FILE *inp)
 {
   BEGIN INITIAL;
@@ -325,13 +327,13 @@ canonicalizeNumeral (char *s1, const char *s2)
  */
 
 static int
-processInt (const char *base0, const char *num0, const char *exp0)
+processInt (struct parser_state *par_state, const char *base0,
+	    const char *num0, const char *exp0)
 {
   ULONGEST result;
   long exp;
   int base;
-
-  char *trailer;
+  const char *trailer;
 
   if (base0 == NULL)
     base = 10;
@@ -348,7 +350,7 @@ processInt (const char *base0, const char *num0, const char *exp0)
     exp = strtol(exp0, (char **) NULL, 10);
 
   errno = 0;
-  result = strtoulst (num0, (const char **) &trailer, base);
+  result = strtoulst (num0, &trailer, base);
   if (errno == ERANGE)
     error (_("Integer literal out of range"));
   if (isxdigit(*trailer))
@@ -362,11 +364,11 @@ processInt (const char *base0, const char *num0, const char *exp0)
       exp -= 1;
     }
 
-  if ((result >> (gdbarch_int_bit (parse_gdbarch)-1)) == 0)
-    yylval.typed_val.type = type_int ();
-  else if ((result >> (gdbarch_long_bit (parse_gdbarch)-1)) == 0)
-    yylval.typed_val.type = type_long ();
-  else if (((result >> (gdbarch_long_bit (parse_gdbarch)-1)) >> 1) == 0)
+  if ((result >> (gdbarch_int_bit (parse_gdbarch (par_state))-1)) == 0)
+    yylval.typed_val.type = type_int (par_state);
+  else if ((result >> (gdbarch_long_bit (parse_gdbarch (par_state))-1)) == 0)
+    yylval.typed_val.type = type_long (par_state);
+  else if (((result >> (gdbarch_long_bit (parse_gdbarch (par_state))-1)) >> 1) == 0)
     {
       /* We have a number representable as an unsigned integer quantity.
          For consistency with the C treatment, we will treat it as an
@@ -376,7 +378,7 @@ processInt (const char *base0, const char *num0, const char *exp0)
          assignment does the trick (no, it doesn't; read the reference manual).
        */
       yylval.typed_val.type
-	= builtin_type (parse_gdbarch)->builtin_unsigned_long;
+	= builtin_type (parse_gdbarch (par_state))->builtin_unsigned_long;
       if (result & LONGEST_SIGN)
 	yylval.typed_val.val =
 	  (LONGEST) (result & ~LONGEST_SIGN)
@@ -386,31 +388,33 @@ processInt (const char *base0, const char *num0, const char *exp0)
       return INT;
     }
   else
-    yylval.typed_val.type = type_long_long ();
+    yylval.typed_val.type = type_long_long (par_state);
 
   yylval.typed_val.val = (LONGEST) result;
   return INT;
 }
 
 static int
-processReal (const char *num0)
+processReal (struct parser_state *par_state, const char *num0)
 {
   sscanf (num0, "%" DOUBLEST_SCAN_FORMAT, &yylval.typed_val_float.dval);
 
-  yylval.typed_val_float.type = type_float ();
-  if (sizeof(DOUBLEST) >= gdbarch_double_bit (parse_gdbarch)
+  yylval.typed_val_float.type = type_float (par_state);
+  if (sizeof(DOUBLEST) >= gdbarch_double_bit (parse_gdbarch (par_state))
 			    / TARGET_CHAR_BIT)
-    yylval.typed_val_float.type = type_double ();
-  if (sizeof(DOUBLEST) >= gdbarch_long_double_bit (parse_gdbarch)
+    yylval.typed_val_float.type = type_double (par_state);
+  if (sizeof(DOUBLEST) >= gdbarch_long_double_bit (parse_gdbarch (par_state))
 			    / TARGET_CHAR_BIT)
-    yylval.typed_val_float.type = type_long_double ();
+    yylval.typed_val_float.type = type_long_double (par_state);
 
   return FLOAT;
 }
 
 
 /* Store a canonicalized version of NAME0[0..LEN-1] in yylval.ssym.  The
-   resulting string is valid until the next call to ada_parse.  It differs
+   resulting string is valid until the next call to ada_parse.  If
+   NAME0 contains the substring "___", it is assumed to be already
+   encoded and the resulting name is equal to it.  Otherwise, it differs
    from NAME0 in that:
     + Characters between '...' or <...> are transfered verbatim to 
       yylval.ssym.
@@ -430,8 +434,18 @@ processId (const char *name0, int len)
   int i0, i;
   struct stoken result;
 
+  result.ptr = name;
   while (len > 0 && isspace (name0[len-1]))
     len -= 1;
+
+  if (strstr (name0, "___") != NULL)
+    {
+      strncpy (name, name0, len);
+      name[len] = '\000';
+      result.length = len;
+      return result;
+    }
+
   i = i0 = 0;
   while (i0 < len)
     {
@@ -471,7 +485,6 @@ processId (const char *name0, int len)
     }
   name[i] = '\000';
 
-  result.ptr = name;
   result.length = i;
   return result;
 }
@@ -488,7 +501,8 @@ processString (const char *text, int len)
   const char *lim = text + len;
   struct stoken result;
 
-  q = result.ptr = obstack_alloc (&temp_parse_space, len);
+  q = obstack_alloc (&temp_parse_space, len);
+  result.ptr = q;
   p = text;
   while (p < lim)
     {
@@ -527,19 +541,20 @@ static int
 find_dot_all (const char *str)
 {
   int i;
-  for (i = 0; str[i] != '\000'; i += 1)
-    {
-      if (str[i] == '.')
-	{
-	  int i0 = i;
-	  do
-	    i += 1;
-	  while (isspace (str[i]));
-	  if (strncmp (str+i, "all", 3) == 0
-	      && ! isalnum (str[i+3]) && str[i+3] != '_')
-	    return i0;
-	}
-    }
+
+  for (i = 0; str[i] != '\000'; i++)
+    if (str[i] == '.')
+      {
+	int i0 = i;
+
+	do
+	  i += 1;
+	while (isspace (str[i]));
+
+	if (strncasecmp (str + i, "all", 3) == 0
+	    && !isalnum (str[i + 3]) && str[i + 3] != '_')
+	  return i0;
+      }
   return -1;
 }
 
@@ -604,6 +619,23 @@ processAttribute (const char *str)
     error (_("unrecognized attribute: `%s'"), str);
 
   return attributes[k].code;
+}
+
+/* Back up lexptr by yyleng and then to the rightmost occurrence of
+   character CH, case-folded (there must be one).  WARNING: since
+   lexptr points to the next input character that Flex has not yet
+   transferred to its internal buffer, the use of this function
+   depends on the assumption that Flex calls YY_INPUT only when it is
+   logically necessary to do so (thus, there is no reading ahead
+   farther than needed to identify the next token.)  */
+
+static void
+rewind_to_char (int ch)
+{
+  lexptr -= yyleng;
+  while (toupper (*lexptr) != toupper (ch))
+    lexptr -= 1;
+  yyrestart (NULL);
 }
 
 int

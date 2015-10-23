@@ -1,7 +1,6 @@
 /* Target-dependent code for OpenBSD/powerpc.
 
-   Copyright (C) 2004, 2006, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2004-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -31,8 +30,8 @@ extern struct ppc_reg_offsets ppcobsd_reg_offsets;
 extern struct ppc_reg_offsets ppcobsd_fpreg_offsets;
 
 /* Register sets for OpenBSD/powerpc.  */
-extern struct regset ppcobsd_gregset;
-extern struct regset ppcobsd_fpregset;
+extern const struct regset ppcobsd_gregset;
+extern const struct regset ppcobsd_fpregset;
 
 
 /* Supply register REGNUM in the general-purpose register set REGSET
@@ -44,7 +43,7 @@ extern void ppcobsd_supply_gregset (const struct regset *regset,
 				    const void *gregs, size_t len);
 
 /* Collect register REGNUM in the general-purpose register set
-   REGSET. from register cache REGCACHE into the buffer specified by
+   REGSET, from register cache REGCACHE into the buffer specified by
    GREGS and LEN.  If REGNUM is -1, do this for all registers in
    REGSET.  */
 

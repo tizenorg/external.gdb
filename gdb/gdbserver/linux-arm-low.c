@@ -1,6 +1,5 @@
 /* GNU/Linux/ARM specific low level interface, for the remote server for GDB.
-   Copyright (C) 1995, 1996, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005,
-   2006, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 1995-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -26,13 +25,23 @@
 #include <elf.h>
 #endif
 #include <sys/ptrace.h>
+#include <signal.h>
 
 /* Defined in auto-generated files.  */
 void init_registers_arm (void);
+extern const struct target_desc *tdesc_arm;
+
 void init_registers_arm_with_iwmmxt (void);
+extern const struct target_desc *tdesc_arm_with_iwmmxt;
+
 void init_registers_arm_with_vfpv2 (void);
+extern const struct target_desc *tdesc_arm_with_vfpv2;
+
 void init_registers_arm_with_vfpv3 (void);
+extern const struct target_desc *tdesc_arm_with_vfpv3;
+
 void init_registers_arm_with_neon (void);
+extern const struct target_desc *tdesc_arm_with_neon;
 
 #ifndef PTRACE_GET_THREAD_AREA
 #define PTRACE_GET_THREAD_AREA 22
@@ -47,6 +56,65 @@ void init_registers_arm_with_neon (void);
 # define PTRACE_GETVFPREGS 27
 # define PTRACE_SETVFPREGS 28
 #endif
+
+#ifndef PTRACE_GETHBPREGS
+#define PTRACE_GETHBPREGS 29
+#define PTRACE_SETHBPREGS 30
+#endif
+
+/* Information describing the hardware breakpoint capabilities.  */
+static struct
+{
+  unsigned char arch;
+  unsigned char max_wp_length;
+  unsigned char wp_count;
+  unsigned char bp_count;
+} arm_linux_hwbp_cap;
+
+/* Enum describing the different types of ARM hardware break-/watch-points.  */
+typedef enum
+{
+  arm_hwbp_break = 0,
+  arm_hwbp_load = 1,
+  arm_hwbp_store = 2,
+  arm_hwbp_access = 3
+} arm_hwbp_type;
+
+/* Type describing an ARM Hardware Breakpoint Control register value.  */
+typedef unsigned int arm_hwbp_control_t;
+
+/* Structure used to keep track of hardware break-/watch-points.  */
+struct arm_linux_hw_breakpoint
+{
+  /* Address to break on, or being watched.  */
+  unsigned int address;
+  /* Control register for break-/watch- point.  */
+  arm_hwbp_control_t control;
+};
+
+/* Since we cannot dynamically allocate subfields of arch_process_info,
+   assume a maximum number of supported break-/watchpoints.  */
+#define MAX_BPTS 32
+#define MAX_WPTS 32
+
+/* Per-process arch-specific data we want to keep.  */
+struct arch_process_info
+{
+  /* Hardware breakpoints for this process.  */
+  struct arm_linux_hw_breakpoint bpts[MAX_BPTS];
+  /* Hardware watchpoints for this process.  */
+  struct arm_linux_hw_breakpoint wpts[MAX_WPTS];
+};
+
+/* Per-thread arch-specific data we want to keep.  */
+struct arch_lwp_info
+{
+  /* Non-zero if our copy differs from what's recorded in the thread.  */
+  char bpts_changed[MAX_BPTS];
+  char wpts_changed[MAX_WPTS];
+  /* Cached stopped data address.  */
+  CORE_ADDR stopped_data_address;
+};
 
 static unsigned long arm_hwcap;
 
@@ -153,7 +221,7 @@ arm_fill_vfpregset (struct regcache *regcache, void *buf)
   else
     num = 16;
 
-  base = find_regno ("d0");
+  base = find_regno (regcache->tdesc, "d0");
   for (i = 0; i < num; i++)
     collect_register (regcache, base + i, (char *) buf + i * 8);
 
@@ -173,7 +241,7 @@ arm_store_vfpregset (struct regcache *regcache, const void *buf)
   else
     num = 16;
 
-  base = find_regno ("d0");
+  base = find_regno (regcache->tdesc, "d0");
   for (i = 0; i < num; i++)
     supply_register (regcache, base + i, (char *) buf + i * 8);
 
@@ -188,7 +256,7 @@ arm_get_pc (struct regcache *regcache)
   unsigned long pc;
   collect_register_by_name (regcache, "pc", &pc);
   if (debug_threads)
-    fprintf (stderr, "stop pc is %08lx\n", pc);
+    debug_printf ("stop pc is %08lx\n", pc);
   return pc;
 }
 
@@ -280,6 +348,429 @@ ps_get_thread_area (const struct ps_prochandle *ph,
   return PS_OK;
 }
 
+
+/* Query Hardware Breakpoint information for the target we are attached to
+   (using PID as ptrace argument) and set up arm_linux_hwbp_cap.  */
+static void
+arm_linux_init_hwbp_cap (int pid)
+{
+  unsigned int val;
+
+  if (ptrace (PTRACE_GETHBPREGS, pid, 0, &val) < 0)
+    return;
+
+  arm_linux_hwbp_cap.arch = (unsigned char)((val >> 24) & 0xff);
+  if (arm_linux_hwbp_cap.arch == 0)
+    return;
+
+  arm_linux_hwbp_cap.max_wp_length = (unsigned char)((val >> 16) & 0xff);
+  arm_linux_hwbp_cap.wp_count = (unsigned char)((val >> 8) & 0xff);
+  arm_linux_hwbp_cap.bp_count = (unsigned char)(val & 0xff);
+
+  if (arm_linux_hwbp_cap.wp_count > MAX_WPTS)
+    internal_error (__FILE__, __LINE__, "Unsupported number of watchpoints");
+  if (arm_linux_hwbp_cap.bp_count > MAX_BPTS)
+    internal_error (__FILE__, __LINE__, "Unsupported number of breakpoints");
+}
+
+/* How many hardware breakpoints are available?  */
+static int
+arm_linux_get_hw_breakpoint_count (void)
+{
+  return arm_linux_hwbp_cap.bp_count;
+}
+
+/* How many hardware watchpoints are available?  */
+static int
+arm_linux_get_hw_watchpoint_count (void)
+{
+  return arm_linux_hwbp_cap.wp_count;
+}
+
+/* Maximum length of area watched by hardware watchpoint.  */
+static int
+arm_linux_get_hw_watchpoint_max_length (void)
+{
+  return arm_linux_hwbp_cap.max_wp_length;
+}
+
+/* Initialize an ARM hardware break-/watch-point control register value.
+   BYTE_ADDRESS_SELECT is the mask of bytes to trigger on; HWBP_TYPE is the
+   type of break-/watch-point; ENABLE indicates whether the point is enabled.
+   */
+static arm_hwbp_control_t
+arm_hwbp_control_initialize (unsigned byte_address_select,
+			     arm_hwbp_type hwbp_type,
+			     int enable)
+{
+  gdb_assert ((byte_address_select & ~0xffU) == 0);
+  gdb_assert (hwbp_type != arm_hwbp_break
+	      || ((byte_address_select & 0xfU) != 0));
+
+  return (byte_address_select << 5) | (hwbp_type << 3) | (3 << 1) | enable;
+}
+
+/* Does the breakpoint control value CONTROL have the enable bit set?  */
+static int
+arm_hwbp_control_is_enabled (arm_hwbp_control_t control)
+{
+  return control & 0x1;
+}
+
+/* Is the breakpoint control value CONTROL initialized?  */
+static int
+arm_hwbp_control_is_initialized (arm_hwbp_control_t control)
+{
+  return control != 0;
+}
+
+/* Change a breakpoint control word so that it is in the disabled state.  */
+static arm_hwbp_control_t
+arm_hwbp_control_disable (arm_hwbp_control_t control)
+{
+  return control & ~0x1;
+}
+
+/* Are two break-/watch-points equal?  */
+static int
+arm_linux_hw_breakpoint_equal (const struct arm_linux_hw_breakpoint *p1,
+			       const struct arm_linux_hw_breakpoint *p2)
+{
+  return p1->address == p2->address && p1->control == p2->control;
+}
+
+/* Convert a raw breakpoint type to an enum arm_hwbp_type.  */
+
+static int
+raw_bkpt_type_to_arm_hwbp_type (enum raw_bkpt_type raw_type)
+{
+  switch (raw_type)
+    {
+    case raw_bkpt_type_hw:
+      return arm_hwbp_break;
+    case raw_bkpt_type_write_wp:
+      return arm_hwbp_store;
+    case raw_bkpt_type_read_wp:
+      return arm_hwbp_load;
+    case raw_bkpt_type_access_wp:
+      return arm_hwbp_access;
+    default:
+      gdb_assert_not_reached ("unhandled raw type");
+    }
+}
+
+/* Initialize the hardware breakpoint structure P for a breakpoint or
+   watchpoint at ADDR to LEN.  The type of watchpoint is given in TYPE.
+   Returns -1 if TYPE is unsupported, or -2 if the particular combination
+   of ADDR and LEN cannot be implemented.  Otherwise, returns 0 if TYPE
+   represents a breakpoint and 1 if type represents a watchpoint.  */
+static int
+arm_linux_hw_point_initialize (enum raw_bkpt_type raw_type, CORE_ADDR addr,
+			       int len, struct arm_linux_hw_breakpoint *p)
+{
+  arm_hwbp_type hwbp_type;
+  unsigned mask;
+
+  hwbp_type = raw_bkpt_type_to_arm_hwbp_type (raw_type);
+
+  if (hwbp_type == arm_hwbp_break)
+    {
+      /* For breakpoints, the length field encodes the mode.  */
+      switch (len)
+	{
+	case 2:	 /* 16-bit Thumb mode breakpoint */
+	case 3:  /* 32-bit Thumb mode breakpoint */
+	  mask = 0x3;
+	  addr &= ~1;
+	  break;
+	case 4:  /* 32-bit ARM mode breakpoint */
+	  mask = 0xf;
+	  addr &= ~3;
+	  break;
+	default:
+	  /* Unsupported. */
+	  return -2;
+	}
+    }
+  else
+    {
+      CORE_ADDR max_wp_length = arm_linux_get_hw_watchpoint_max_length ();
+      CORE_ADDR aligned_addr;
+
+      /* Can not set watchpoints for zero or negative lengths.  */
+      if (len <= 0)
+	return -2;
+      /* The current ptrace interface can only handle watchpoints that are a
+	 power of 2.  */
+      if ((len & (len - 1)) != 0)
+	return -2;
+
+      /* Test that the range [ADDR, ADDR + LEN) fits into the largest address
+	 range covered by a watchpoint.  */
+      aligned_addr = addr & ~(max_wp_length - 1);
+      if (aligned_addr + max_wp_length < addr + len)
+	return -2;
+
+      mask = (1 << len) - 1;
+    }
+
+  p->address = (unsigned int) addr;
+  p->control = arm_hwbp_control_initialize (mask, hwbp_type, 1);
+
+  return hwbp_type != arm_hwbp_break;
+}
+
+/* Callback to mark a watch-/breakpoint to be updated in all threads of
+   the current process.  */
+
+struct update_registers_data
+{
+  int watch;
+  int i;
+};
+
+static int
+update_registers_callback (struct inferior_list_entry *entry, void *arg)
+{
+  struct thread_info *thread = (struct thread_info *) entry;
+  struct lwp_info *lwp = get_thread_lwp (thread);
+  struct update_registers_data *data = (struct update_registers_data *) arg;
+
+  /* Only update the threads of the current process.  */
+  if (pid_of (thread) == pid_of (current_inferior))
+    {
+      /* The actual update is done later just before resuming the lwp,
+         we just mark that the registers need updating.  */
+      if (data->watch)
+	lwp->arch_private->wpts_changed[data->i] = 1;
+      else
+	lwp->arch_private->bpts_changed[data->i] = 1;
+
+      /* If the lwp isn't stopped, force it to momentarily pause, so
+         we can update its breakpoint registers.  */
+      if (!lwp->stopped)
+        linux_stop_lwp (lwp);
+    }
+
+  return 0;
+}
+
+static int
+arm_supports_z_point_type (char z_type)
+{
+  switch (z_type)
+    {
+    case Z_PACKET_HW_BP:
+    case Z_PACKET_WRITE_WP:
+    case Z_PACKET_READ_WP:
+    case Z_PACKET_ACCESS_WP:
+      return 1;
+    default:
+      /* Leave the handling of sw breakpoints with the gdb client.  */
+      return 0;
+    }
+}
+
+/* Insert hardware break-/watchpoint.  */
+static int
+arm_insert_point (enum raw_bkpt_type type, CORE_ADDR addr,
+		  int len, struct raw_breakpoint *bp)
+{
+  struct process_info *proc = current_process ();
+  struct arm_linux_hw_breakpoint p, *pts;
+  int watch, i, count;
+
+  watch = arm_linux_hw_point_initialize (type, addr, len, &p);
+  if (watch < 0)
+    {
+      /* Unsupported.  */
+      return watch == -1 ? 1 : -1;
+    }
+
+  if (watch)
+    {
+      count = arm_linux_get_hw_watchpoint_count ();
+      pts = proc->private->arch_private->wpts;
+    }
+  else
+    {
+      count = arm_linux_get_hw_breakpoint_count ();
+      pts = proc->private->arch_private->bpts;
+    }
+
+  for (i = 0; i < count; i++)
+    if (!arm_hwbp_control_is_enabled (pts[i].control))
+      {
+	struct update_registers_data data = { watch, i };
+	pts[i] = p;
+	find_inferior (&all_threads, update_registers_callback, &data);
+	return 0;
+      }
+
+  /* We're out of watchpoints.  */
+  return -1;
+}
+
+/* Remove hardware break-/watchpoint.  */
+static int
+arm_remove_point (enum raw_bkpt_type type, CORE_ADDR addr,
+		  int len, struct raw_breakpoint *bp)
+{
+  struct process_info *proc = current_process ();
+  struct arm_linux_hw_breakpoint p, *pts;
+  int watch, i, count;
+
+  watch = arm_linux_hw_point_initialize (type, addr, len, &p);
+  if (watch < 0)
+    {
+      /* Unsupported.  */
+      return -1;
+    }
+
+  if (watch)
+    {
+      count = arm_linux_get_hw_watchpoint_count ();
+      pts = proc->private->arch_private->wpts;
+    }
+  else
+    {
+      count = arm_linux_get_hw_breakpoint_count ();
+      pts = proc->private->arch_private->bpts;
+    }
+
+  for (i = 0; i < count; i++)
+    if (arm_linux_hw_breakpoint_equal (&p, pts + i))
+      {
+	struct update_registers_data data = { watch, i };
+	pts[i].control = arm_hwbp_control_disable (pts[i].control);
+	find_inferior (&all_threads, update_registers_callback, &data);
+	return 0;
+      }
+
+  /* No watchpoint matched.  */
+  return -1;
+}
+
+/* Return whether current thread is stopped due to a watchpoint.  */
+static int
+arm_stopped_by_watchpoint (void)
+{
+  struct lwp_info *lwp = get_thread_lwp (current_inferior);
+  siginfo_t siginfo;
+
+  /* We must be able to set hardware watchpoints.  */
+  if (arm_linux_get_hw_watchpoint_count () == 0)
+    return 0;
+
+  /* Retrieve siginfo.  */
+  errno = 0;
+  ptrace (PTRACE_GETSIGINFO, lwpid_of (current_inferior), 0, &siginfo);
+  if (errno != 0)
+    return 0;
+
+  /* This must be a hardware breakpoint.  */
+  if (siginfo.si_signo != SIGTRAP
+      || (siginfo.si_code & 0xffff) != 0x0004 /* TRAP_HWBKPT */)
+    return 0;
+
+  /* If we are in a positive slot then we're looking at a breakpoint and not
+     a watchpoint.  */
+  if (siginfo.si_errno >= 0)
+    return 0;
+
+  /* Cache stopped data address for use by arm_stopped_data_address.  */
+  lwp->arch_private->stopped_data_address
+    = (CORE_ADDR) (uintptr_t) siginfo.si_addr;
+
+  return 1;
+}
+
+/* Return data address that triggered watchpoint.  Called only if
+   arm_stopped_by_watchpoint returned true.  */
+static CORE_ADDR
+arm_stopped_data_address (void)
+{
+  struct lwp_info *lwp = get_thread_lwp (current_inferior);
+  return lwp->arch_private->stopped_data_address;
+}
+
+/* Called when a new process is created.  */
+static struct arch_process_info *
+arm_new_process (void)
+{
+  struct arch_process_info *info = xcalloc (1, sizeof (*info));
+  return info;
+}
+
+/* Called when a new thread is detected.  */
+static struct arch_lwp_info *
+arm_new_thread (void)
+{
+  struct arch_lwp_info *info = xcalloc (1, sizeof (*info));
+  int i;
+
+  for (i = 0; i < MAX_BPTS; i++)
+    info->bpts_changed[i] = 1;
+  for (i = 0; i < MAX_WPTS; i++)
+    info->wpts_changed[i] = 1;
+
+  return info;
+}
+
+/* Called when resuming a thread.
+   If the debug regs have changed, update the thread's copies.  */
+static void
+arm_prepare_to_resume (struct lwp_info *lwp)
+{
+  struct thread_info *thread = get_lwp_thread (lwp);
+  int pid = lwpid_of (thread);
+  struct process_info *proc = find_process_pid (pid_of (thread));
+  struct arch_process_info *proc_info = proc->private->arch_private;
+  struct arch_lwp_info *lwp_info = lwp->arch_private;
+  int i;
+
+  for (i = 0; i < arm_linux_get_hw_breakpoint_count (); i++)
+    if (lwp_info->bpts_changed[i])
+      {
+	errno = 0;
+
+	if (arm_hwbp_control_is_enabled (proc_info->bpts[i].control))
+	  if (ptrace (PTRACE_SETHBPREGS, pid,
+		      (PTRACE_TYPE_ARG3) ((i << 1) + 1),
+		      &proc_info->bpts[i].address) < 0)
+	    perror_with_name ("Unexpected error setting breakpoint address");
+
+	if (arm_hwbp_control_is_initialized (proc_info->bpts[i].control))
+	  if (ptrace (PTRACE_SETHBPREGS, pid,
+		      (PTRACE_TYPE_ARG3) ((i << 1) + 2),
+		      &proc_info->bpts[i].control) < 0)
+	    perror_with_name ("Unexpected error setting breakpoint");
+
+	lwp_info->bpts_changed[i] = 0;
+      }
+
+  for (i = 0; i < arm_linux_get_hw_watchpoint_count (); i++)
+    if (lwp_info->wpts_changed[i])
+      {
+	errno = 0;
+
+	if (arm_hwbp_control_is_enabled (proc_info->wpts[i].control))
+	  if (ptrace (PTRACE_SETHBPREGS, pid,
+		      (PTRACE_TYPE_ARG3) -((i << 1) + 1),
+		      &proc_info->wpts[i].address) < 0)
+	    perror_with_name ("Unexpected error setting watchpoint address");
+
+	if (arm_hwbp_control_is_initialized (proc_info->wpts[i].control))
+	  if (ptrace (PTRACE_SETHBPREGS, pid,
+		      (PTRACE_TYPE_ARG3) -((i << 1) + 2),
+		      &proc_info->wpts[i].control) < 0)
+	    perror_with_name ("Unexpected error setting watchpoint");
+
+	lwp_info->wpts_changed[i] = 0;
+      }
+}
+
+
 static int
 arm_get_hwcap (unsigned long *valp)
 {
@@ -302,58 +793,62 @@ arm_get_hwcap (unsigned long *valp)
   return 0;
 }
 
-static void
-arm_arch_setup (void)
+static const struct target_desc *
+arm_read_description (void)
 {
+  int pid = lwpid_of (current_inferior);
+
+  /* Query hardware watchpoint/breakpoint capabilities.  */
+  arm_linux_init_hwbp_cap (pid);
+
   arm_hwcap = 0;
   if (arm_get_hwcap (&arm_hwcap) == 0)
-    {
-      init_registers_arm ();
-      return;
-    }
+    return tdesc_arm;
 
   if (arm_hwcap & HWCAP_IWMMXT)
-    {
-      init_registers_arm_with_iwmmxt ();
-      return;
-    }
+    return tdesc_arm_with_iwmmxt;
 
   if (arm_hwcap & HWCAP_VFP)
     {
-      int pid;
+      const struct target_desc *result;
       char *buf;
 
       /* NEON implies either no VFP, or VFPv3-D32.  We only support
 	 it with VFP.  */
       if (arm_hwcap & HWCAP_NEON)
-	init_registers_arm_with_neon ();
+	result = tdesc_arm_with_neon;
       else if ((arm_hwcap & (HWCAP_VFPv3 | HWCAP_VFPv3D16)) == HWCAP_VFPv3)
-	init_registers_arm_with_vfpv3 ();
+	result = tdesc_arm_with_vfpv3;
       else
-	init_registers_arm_with_vfpv2 ();
+	result = tdesc_arm_with_vfpv2;
 
       /* Now make sure that the kernel supports reading these
 	 registers.  Support was added in 2.6.30.  */
-      pid = lwpid_of (get_thread_lwp (current_inferior));
       errno = 0;
-      buf = malloc (32 * 8 + 4);
+      buf = xmalloc (32 * 8 + 4);
       if (ptrace (PTRACE_GETVFPREGS, pid, 0, buf) < 0
 	  && errno == EIO)
 	{
 	  arm_hwcap = 0;
-	  init_registers_arm ();
+	  result = tdesc_arm;
 	}
       free (buf);
 
-      return;
+      return result;
     }
 
   /* The default configuration uses legacy FPA registers, probably
      simulated.  */
-  init_registers_arm ();
+  return tdesc_arm;
 }
 
-struct regset_info target_regsets[] = {
+static void
+arm_arch_setup (void)
+{
+  current_process ()->tdesc = arm_read_description ();
+}
+
+static struct regset_info arm_regsets[] = {
   { PTRACE_GETREGS, PTRACE_SETREGS, 0, 18 * 4,
     GENERAL_REGS,
     arm_fill_gregset, arm_store_gregset },
@@ -366,12 +861,38 @@ struct regset_info target_regsets[] = {
   { 0, 0, 0, -1, -1, NULL, NULL }
 };
 
+static struct regsets_info arm_regsets_info =
+  {
+    arm_regsets, /* regsets */
+    0, /* num_regsets */
+    NULL, /* disabled_regsets */
+  };
+
+static struct usrregs_info arm_usrregs_info =
+  {
+    arm_num_regs,
+    arm_regmap,
+  };
+
+static struct regs_info regs_info =
+  {
+    NULL, /* regset_bitmap */
+    &arm_usrregs_info,
+    &arm_regsets_info
+  };
+
+static const struct regs_info *
+arm_regs_info (void)
+{
+  return &regs_info;
+}
+
 struct linux_target_ops the_low_target = {
   arm_arch_setup,
-  arm_num_regs,
-  arm_regmap,
+  arm_regs_info,
   arm_cannot_fetch_register,
   arm_cannot_store_register,
+  NULL, /* fetch_register */
   arm_get_pc,
   arm_set_pc,
 
@@ -389,4 +910,28 @@ struct linux_target_ops the_low_target = {
   arm_reinsert_addr,
   0,
   arm_breakpoint_at,
+  arm_supports_z_point_type,
+  arm_insert_point,
+  arm_remove_point,
+  arm_stopped_by_watchpoint,
+  arm_stopped_data_address,
+  NULL, /* collect_ptrace_register */
+  NULL, /* supply_ptrace_register */
+  NULL, /* siginfo_fixup */
+  arm_new_process,
+  arm_new_thread,
+  arm_prepare_to_resume,
 };
+
+void
+initialize_low_arch (void)
+{
+  /* Initialize the Linux target descriptions.  */
+  init_registers_arm ();
+  init_registers_arm_with_iwmmxt ();
+  init_registers_arm_with_vfpv2 ();
+  init_registers_arm_with_vfpv3 ();
+  init_registers_arm_with_neon ();
+
+  initialize_regsets_info (&arm_regsets_info);
+}

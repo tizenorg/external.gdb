@@ -29,6 +29,7 @@ code on the hardware.
 #define TRACE (1)
 #endif
 
+#include "config.h"
 #include "bfd.h"
 #include "sim-main.h"
 #include "sim-utils.h"
@@ -64,12 +65,8 @@ code on the hardware.
 #include "gdb/callback.h"   /* GDB simulator callback interface */
 #include "gdb/remote-sim.h" /* GDB simulator interface */
 
-#ifndef PARAMS
-#define PARAMS(x) 
-#endif
-
-char* pr_addr PARAMS ((SIM_ADDR addr));
-char* pr_uword64 PARAMS ((uword64 addr));
+char* pr_addr (SIM_ADDR addr);
+char* pr_uword64 (uword64 addr);
 
 
 /* Within interp.c we refer to the sim_state and sim_cpu directly. */
@@ -97,7 +94,7 @@ char* pr_uword64 PARAMS ((uword64 addr));
 /*-- GDB simulator interface ------------------------------------------------*/
 /*---------------------------------------------------------------------------*/
 
-static void ColdReset PARAMS((SIM_DESC sd));
+static void ColdReset (SIM_DESC sd);
 
 /*---------------------------------------------------------------------------*/
 
@@ -163,7 +160,7 @@ static SIM_RC sim_firmware_command (SIM_DESC sd, char* arg);
 #if defined(TRACE)
 static char *tracefile = "trace.din"; /* default filename for trace log */
 FILE *tracefh = NULL;
-static void open_trace PARAMS((SIM_DESC sd));
+static void open_trace (SIM_DESC sd);
 #endif /* TRACE */
 
 static const char * get_insn_name (sim_cpu *, int);
@@ -1142,16 +1139,6 @@ sim_create_inferior (sd, abfd, argv,env)
   return SIM_RC_OK;
 }
 
-void
-sim_do_command (sd,cmd)
-     SIM_DESC sd;
-     char *cmd;
-{
-  if (sim_args_command (sd, cmd) != SIM_RC_OK)
-    sim_io_printf (sd, "Error: \"%s\" is not a valid MIPS simulator command.\n",
-		   cmd);
-}
-
 /*---------------------------------------------------------------------------*/
 /*-- Private simulator support interface ------------------------------------*/
 /*---------------------------------------------------------------------------*/
@@ -1285,7 +1272,7 @@ sim_monitor (SIM_DESC sd,
       {
 	char *path = fetch_str (sd, A0);
 	V0 = sim_io_open (sd, path, (int)A1);
-	zfree (path);
+	free (path);
 	break;
       }
 
@@ -1296,7 +1283,7 @@ sim_monitor (SIM_DESC sd,
 	char *buf = zalloc (nr);
 	V0 = sim_io_read (sd, fd, buf, nr);
 	sim_write (sd, A1, buf, nr);
-	zfree (buf);
+	free (buf);
       }
       break;
 
@@ -1311,7 +1298,7 @@ sim_monitor (SIM_DESC sd,
 	    sim_io_flush_stdout (sd);
 	else if (fd == 2)
 	    sim_io_flush_stderr (sd);
-	zfree (buf);
+	free (buf);
 	break;
       }
 

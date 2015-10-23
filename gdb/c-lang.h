@@ -1,7 +1,6 @@
 /* C language support definitions for GDB, the GNU debugger.
 
-   Copyright (C) 1992, 1994, 1995, 1996, 1997, 1998, 2000, 2002, 2005, 2006,
-   2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+   Copyright (C) 1992-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -24,9 +23,12 @@
 
 struct ui_file;
 struct language_arch_info;
+struct type_print_options;
+struct parser_state;
 
 #include "value.h"
 #include "macroexp.h"
+#include "parser-defs.h"
 
 
 /* The various kinds of C string and character.  Note that these
@@ -56,33 +58,45 @@ enum c_string_type
 
 /* Defined in c-exp.y.  */
 
-extern int c_parse (void);
+extern int c_parse (struct parser_state *);
 
 extern void c_error (char *);
 
-extern int c_parse_escape (char **, struct obstack *);
+extern int c_parse_escape (const char **, struct obstack *);
 
 /* Defined in c-typeprint.c */
-extern void c_print_type (struct type *, const char *, struct ui_file *, int,
-			  int);
+extern void c_print_type (struct type *, const char *,
+			  struct ui_file *, int, int,
+			  const struct type_print_options *);
 
-extern void c_print_typedef (struct type *, struct symbol *, struct ui_file *);
+extern void c_print_typedef (struct type *,
+			     struct symbol *,
+			     struct ui_file *);
 
-extern int c_val_print (struct type *, const gdb_byte *, int, CORE_ADDR,
-			struct ui_file *, int,
-			const struct value *,
-			const struct value_print_options *);
+extern void c_val_print (struct type *, const gdb_byte *,
+			 int, CORE_ADDR,
+			 struct ui_file *, int,
+			 const struct value *,
+			 const struct value_print_options *);
 
-extern int c_value_print (struct value *, struct ui_file *,
-			  const struct value_print_options *);
+extern void c_value_print (struct value *, struct ui_file *,
+			   const struct value_print_options *);
 
 /* These are in c-lang.c: */
 
+extern struct value *evaluate_subexp_c (struct type *expect_type,
+					struct expression *exp,
+					int *pos,
+					enum noside noside);
+
 extern void c_printchar (int, struct type *, struct ui_file *);
 
-extern void c_printstr (struct ui_file * stream, struct type *elttype,
-			const gdb_byte *string, unsigned int length,
-			const char *user_encoding, int force_ellipses,
+extern void c_printstr (struct ui_file * stream,
+			struct type *elttype,
+			const gdb_byte *string,
+			unsigned int length,
+			const char *user_encoding,
+			int force_ellipses,
 			const struct value_print_options *options);
 
 extern void c_language_arch_info (struct gdbarch *gdbarch,
@@ -93,9 +107,12 @@ extern const struct exp_descriptor exp_descriptor_c;
 extern void c_emit_char (int c, struct type *type,
 			 struct ui_file *stream, int quoter);
 
+extern const struct op_print c_op_print_tab[];
+
 /* These are in c-typeprint.c: */
 
-extern void c_type_print_base (struct type *, struct ui_file *, int, int);
+extern void c_type_print_base (struct type *, struct ui_file *,
+			       int, int, const struct type_print_options *);
 
 /* These are in cp-valprint.c */
 

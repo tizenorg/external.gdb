@@ -4,7 +4,7 @@
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
+    the Free Software Foundation; either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
@@ -13,8 +13,7 @@
     GNU General Public License for more details.
 
     You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+    along with this program; if not, see <http://www.gnu.org/licenses/>.
 
     */
 
@@ -258,7 +257,7 @@ write_direntries(unsigned_word addr,
     nbytes -= in->d_reclen;
     addr += in->d_reclen;
     buf += in->d_reclen;
-    zfree(out);
+    free(out);
   }
 }
 #endif
@@ -346,7 +345,7 @@ do_read(os_emul_data *emul,
   if (status > 0)
     emul_write_buffer(scratch_buffer, buf, status, processor, cia);
 
-  zfree(scratch_buffer);
+  free(scratch_buffer);
 }
 
 
@@ -377,7 +376,7 @@ do_write(os_emul_data *emul,
   /* write */
   status = write(d, scratch_buffer, nbytes);
   emul_write_status(processor, status, errno);
-  zfree(scratch_buffer);
+  free(scratch_buffer);
 
   flush_stdoutput();
 }
@@ -916,7 +915,7 @@ do_getdirentries(os_emul_data *emul,
   if (status > 0)
     write_direntries(buf_addr, buf, status, processor, cia);
   if (buf != NULL)
-    zfree(buf);
+    free(buf);
 }
 #endif
 

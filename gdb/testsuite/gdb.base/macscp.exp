@@ -1,5 +1,5 @@
 # Test macro scoping.
-# Copyright 2002, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+# Copyright 2002-2014 Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -14,19 +14,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-if $tracelevel then {
-    strace $tracelevel
-}
 
-
-set srcfile macscp1.c
-set testfile "macscp"
-set objfile ${objdir}/${subdir}/${testfile}.o
-set binfile ${objdir}/${subdir}/${testfile}
+standard_testfile macscp1.c
+set objfile [standard_output_file ${testfile}.o]
 
 set options { debug additional_flags=-DFROM_COMMANDLINE=ARG}
 
-get_compiler_info ${binfile}
+get_compiler_info
 if [test_compiler_info gcc*] {
     lappend options additional_flags=-g3
 }
@@ -40,10 +34,7 @@ if  {[gdb_compile "${srcdir}/${subdir}/macscp1.c" "${objfile}" \
     return -1
 }
 
-gdb_exit
-gdb_start
-gdb_reinitialize_dir $srcdir/$subdir
-gdb_load ${binfile}
+clean_restart ${binfile}
 
 
 # Ask GDB to show the current definition of MACRO, and return a list
@@ -231,6 +222,10 @@ list_and_check_macro macscp3_2 WHERE {macscp3.h macscp1.c {before macscp3_2}}
 gdb_test "info macro FROM_COMMANDLINE" \
 	 "Defined at \[^\r\n\]*:0\r\n-DFROM_COMMANDLINE=ARG"
 
+gdb_test "info macro __FILE__" "#define __FILE__ \".*macscp3.h\"" \
+    "info macro __FILE__ before running"
+gdb_test "info macro __LINE__" "#define __LINE__ 26" \
+    "info macro __LINE__ before running"
 
 # Although GDB's macro table structures distinguish between multiple
 # #inclusions of the same file, GDB's other structures don't.  So the
@@ -440,6 +435,17 @@ gdb_test "break [gdb_get_line_number "set breakpoint here"]" \
     "Breakpoint.*at.* file .*, line.*" \
     "breakpoint macscp_expr"
 
+gdb_test "cond \$bpnum foo == MACRO_TO_EXPAND" \
+  "No symbol \"MACRO_TO_EXPAND\" in current context\." \
+  "macro MACRO_TO_EXPAND not in scope at breakpoint"
+
+# Note that we choose the condition so that this breakpoint never
+# stops.
+set l2 [gdb_get_line_number "set second breakpoint here"]
+gdb_test "break $l2  if foo != MACRO_TO_EXPAND" \
+  "Breakpoint.*at.*" \
+  "breakpoint macscp_expr using MACRO_TO_EXPAND"
+
 gdb_test "continue" "foo = 0;.*" "continue to macsp_expr"
 
 gdb_test "print address.addr" \
@@ -450,7 +456,7 @@ gdb_test "print MACRO_TO_EXPAND" \
     "No symbol \"MACRO_TO_EXPAND\" in current context\." \
     "print expression with macro before define."
 
-gdb_test "next" "foo = 1;" "next to definition 1"
+gdb_test "next" "foo = 1;.*here.*/" "next to definition 1"
 
 gdb_test "print MACRO_TO_EXPAND" \
     " = 0" \
@@ -470,7 +476,7 @@ gdb_test "print MACRO_TO_EXPAND" \
     " = 0" \
     "print expression with macro after removing override"
 
-gdb_test "next" "foo = 2;" "next to definition 2"
+gdb_test "next" "foo = 2;.*" "next to definition 2"
 
 gdb_test "print MACRO_TO_EXPAND" \
     "No symbol \"MACRO_TO_EXPAND\" in current context\." \
@@ -511,74 +517,81 @@ gdb_test "macro undef" \
     "usage: macro undef.*" \
     "macro undef with no arguments"
 
-# Completion tests.
+# Do completion tests if readline is used.
 
-# The macro FIFTY_SEVEN is in scope at this point.
-send_gdb "p FIFTY_\t"
-gdb_expect  {
-        -re "^p FIFTY_SEVEN $"\
-            { send_gdb "\n"
-              gdb_expect {
-                      -re "^.* = 57.*$gdb_prompt $"\
-                                        { pass "complete 'p FIFTY_SEVEN'"}
-                      -re ".*$gdb_prompt $" { fail "complete 'p FIFTY_SEVEN'"}
-                      timeout           {fail "(timeout) complete 'p FIFTY_SEVEN'"}
-                     }
-            }
-        -re ".*$gdb_prompt $"       { fail "complete 'p FIFTY_SEVEN'" }
-        timeout         { fail "(timeout) complete 'p FIFTY_SEVEN' 2" }
-        }
+if { [readline_is_used] } {
 
-# The macro TWENTY_THREE is not in scope.
-send_gdb "p TWENTY_\t"
-gdb_expect  {
-        -re "^p TWENTY_\\\x07$"\
-            { send_gdb "\n"
-              gdb_expect {
-                      -re "No symbol \"TWENTY_\" in current context\\..*$gdb_prompt $"\
-                                        { pass "complete 'p TWENTY_'"}
-                      -re ".*$gdb_prompt $" { fail "complete 'p TWENTY_'"}
-                      timeout           {fail "(timeout) complete 'p TWENTY_'"}
-                     }
-            }
-        -re ".*$gdb_prompt $"       { fail "complete 'p TWENTY_'" }
-        timeout         { fail "(timeout) complete 'p TWENTY_' 2" }
-        }
+    # The macro FIFTY_SEVEN is in scope at this point.
+    send_gdb "p FIFTY_\t"
+    gdb_expect  {
+	-re "^p FIFTY_SEVEN $" {
+	    send_gdb "\n"
+	    gdb_expect {
+		-re "^.* = 57.*$gdb_prompt $" {
+		    pass "complete 'p FIFTY_SEVEN'"
+		}
+		-re ".*$gdb_prompt $" { fail "complete 'p FIFTY_SEVEN'" }
+		timeout { fail "(timeout) complete 'p FIFTY_SEVEN'" }
+	    }
+	}
+	-re ".*$gdb_prompt $" { fail "complete 'p FIFTY_SEVEN'" }
+	timeout { fail "(timeout) complete 'p FIFTY_SEVEN' 2" }
+    }
 
-# The macro FORTY_EIGHT was undefined and thus is not in scope.
-send_gdb "p FORTY_\t"
-gdb_expect  {
-        -re "^p FORTY_\\\x07$"\
-            { send_gdb "\n"
-              gdb_expect {
-                      -re "No symbol \"FORTY_\" in current context\\..*$gdb_prompt $"\
-                                        { pass "complete 'p FORTY_'"}
-                      -re ".*$gdb_prompt $" { fail "complete 'p FORTY_'"}
-                      timeout           {fail "(timeout) complete 'p FORTY_'"}
-                     }
-            }
-        -re ".*$gdb_prompt $"       { fail "complete 'p FORTY_'" }
-        timeout         { fail "(timeout) complete 'p FORTY_' 2" }
-        }
+    # The macro TWENTY_THREE is not in scope.
+    send_gdb "p TWENTY_\t"
+    gdb_expect  {
+	-re "^p TWENTY_\\\x07$" {
+	    send_gdb "\n"
+	    gdb_expect {
+		-re "No symbol \"TWENTY_\" in current context\\..*$gdb_prompt $" {
+		    pass "complete 'p TWENTY_'"
+		}
+		-re ".*$gdb_prompt $" { fail "complete 'p TWENTY_'" }
+		timeout { fail "(timeout) complete 'p TWENTY_'"}
+	    }
+	}
+	-re ".*$gdb_prompt $" { fail "complete 'p TWENTY_'" }
+	timeout { fail "(timeout) complete 'p TWENTY_' 2" }
+    }
 
-gdb_test_no_output "macro define TWENTY_THREE 25" \
-  "defining TWENTY_THREE"
+    # The macro FORTY_EIGHT was undefined and thus is not in scope.
+    send_gdb "p FORTY_\t"
+    gdb_expect  {
+	-re "^p FORTY_\\\x07$" {
+	    send_gdb "\n"
+	    gdb_expect {
+		-re "No symbol \"FORTY_\" in current context\\..*$gdb_prompt $" {
+		    pass "complete 'p FORTY_'"
+		}
+		-re ".*$gdb_prompt $" { fail "complete 'p FORTY_'" }
+		timeout {fail "(timeout) complete 'p FORTY_'"}
+	    }
+	}
+	-re ".*$gdb_prompt $" { fail "complete 'p FORTY_'" }
+	timeout { fail "(timeout) complete 'p FORTY_' 2" }
+    }
 
-# User-defined macros are always in scope.
-send_gdb "p TWENTY_\t"
-gdb_expect  {
-        -re "^p TWENTY_THREE $"\
-            { send_gdb "\n"
-              gdb_expect {
-                      -re "^.* = 25.*$gdb_prompt $"\
-                                        { pass "complete 'p TWENTY_THREE'"}
-                      -re ".*$gdb_prompt $" { fail "complete 'p TWENTY_THREE'"}
-                      timeout           {fail "(timeout) complete 'p TWENTY_THREE'"}
-                     }
-            }
-        -re ".*$gdb_prompt $"       { fail "complete 'p TWENTY_THREE'" }
-        timeout         { fail "(timeout) complete 'p TWENTY_THREE' 2" }
-        }
+    gdb_test_no_output "macro define TWENTY_THREE 25" \
+	"defining TWENTY_THREE"
+
+    # User-defined macros are always in scope.
+    send_gdb "p TWENTY_\t"
+    gdb_expect  {
+	-re "^p TWENTY_THREE $" {
+	    send_gdb "\n"
+	    gdb_expect {
+		-re "^.* = 25.*$gdb_prompt $" {
+		    pass "complete 'p TWENTY_THREE'"
+		}
+		-re ".*$gdb_prompt $" { fail "complete 'p TWENTY_THREE'"}
+		timeout { fail "(timeout) complete 'p TWENTY_THREE'" }
+	    }
+	}
+	-re ".*$gdb_prompt $" { fail "complete 'p TWENTY_THREE'" }
+	timeout { fail "(timeout) complete 'p TWENTY_THREE' 2" }
+    }
+}
 
 # Splicing tests.
 
@@ -677,3 +690,7 @@ gdb_test_no_output "macro define si_addr fields.fault.si_addr" \
 gdb_test "macro expand siginfo.si_addr" \
   "expands to: siginfo.fields.fault.si_addr" \
   "macro expand siginfo.si_addr"
+
+gdb_test "print __FILE__" " = \".*macscp1.c\""
+gdb_test "print __LINE__" \
+    " = [gdb_get_line_number {stopping point for line test}]"

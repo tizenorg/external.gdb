@@ -1,7 +1,6 @@
 /* Target-dependent code for SPARC.
 
-   Copyright (C) 2003, 2004, 2006, 2007, 2008, 2009, 2010
-   Free Software Foundation, Inc.
+   Copyright (C) 2003-2014 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -29,7 +28,7 @@ struct trad_frame_saved_reg;
 
 /* Register offsets for the general-purpose register set.  */
 
-struct sparc_gregset
+struct sparc_gregmap
 {
   int r_psr_offset;
   int r_pc_offset;
@@ -40,6 +39,12 @@ struct sparc_gregset
   int r_g1_offset;
   int r_l0_offset;
   int r_y_size;
+};
+
+struct sparc_fpregmap
+{
+  int r_f0_offset;
+  int r_fsr_offset;
 };
 
 /* SPARC architecture-specific information.  */
@@ -53,9 +58,9 @@ struct gdbarch_tdep
   int npc_regnum;
 
   /* Register sets.  */
-  struct regset *gregset;
+  const struct regset *gregset;
   size_t sizeof_gregset;
-  struct regset *fpregset;
+  const struct regset *fpregset;
   size_t sizeof_fpregset;
 
   /* Offset of saved PC in jmp_buf.  */
@@ -114,6 +119,12 @@ enum sparc_regnum
   SPARC_I7_REGNUM,		/* %i7 */
   SPARC_F0_REGNUM,		/* %f0 */
   SPARC_F1_REGNUM,
+  SPARC_F2_REGNUM,
+  SPARC_F3_REGNUM,
+  SPARC_F4_REGNUM,
+  SPARC_F5_REGNUM,
+  SPARC_F6_REGNUM,
+  SPARC_F7_REGNUM,
   SPARC_F31_REGNUM		/* %f31 */
   = SPARC_F0_REGNUM + 31
 };
@@ -146,7 +157,16 @@ struct sparc_frame_cache
   /* Do we have a frame?  */
   int frameless_p;
 
-  /* Do we have a Structure, Union or Quad-Precision return value?.  */
+  /* The offset from the base register to the CFA.  */
+  int frame_offset;
+
+  /* Mask of `local' and `in' registers saved in the register save area.  */
+  unsigned short int saved_regs_mask;
+
+  /* Mask of `out' registers copied or renamed to their `in' sibling.  */
+  unsigned char copied_regs_mask;
+
+  /* Do we have a Structure, Union or Quad-Precision return value?  */
   int struct_return_p;
 
   /* Table of saved registers.  */
@@ -159,6 +179,10 @@ extern unsigned long sparc_fetch_instruction (CORE_ADDR pc);
 /* Fetch StackGhost Per-Process XOR cookie.  */
 extern ULONGEST sparc_fetch_wcookie (struct gdbarch *gdbarch);
 
+/* Record the effect of a SAVE instruction on CACHE.  */
+extern void sparc_record_save_insn (struct sparc_frame_cache *cache);
+
+/* Do a full analysis of the prologue at PC and update CACHE accordingly.  */
 extern CORE_ADDR sparc_analyze_prologue (struct gdbarch *gdbarch,
 					 CORE_ADDR pc, CORE_ADDR current_pc,
 					 struct sparc_frame_cache *cache);
@@ -168,6 +192,9 @@ extern struct sparc_frame_cache *
 
 extern struct sparc_frame_cache *
   sparc32_frame_cache (struct frame_info *this_frame, void **this_cache);
+
+extern int
+  sparc_in_function_epilogue_p (struct gdbarch *gdbarch, CORE_ADDR pc);
 
 
 
@@ -179,27 +206,34 @@ extern void sparc_collect_rwindow (const struct regcache *regcache,
 				   CORE_ADDR sp, int regnum);
 
 /* Register offsets for SunOS 4.  */
-extern const struct sparc_gregset sparc32_sunos4_gregset;
+extern const struct sparc_gregmap sparc32_sunos4_gregmap;
+extern const struct sparc_fpregmap sparc32_sunos4_fpregmap;
+extern const struct sparc_fpregmap sparc32_bsd_fpregmap;
 
-extern void sparc32_supply_gregset (const struct sparc_gregset *gregset,
+extern void sparc32_supply_gregset (const struct sparc_gregmap *gregmap,
 				    struct regcache *regcache,
 				    int regnum, const void *gregs);
-extern void sparc32_collect_gregset (const struct sparc_gregset *gregset,
+extern void sparc32_collect_gregset (const struct sparc_gregmap *gregmap,
 				     const struct regcache *regcache,
 				     int regnum, void *gregs);
-extern void sparc32_supply_fpregset (struct regcache *regcache,
+extern void sparc32_supply_fpregset (const struct sparc_fpregmap *fpregmap,
+				     struct regcache *regcache,
 				     int regnum, const void *fpregs);
-extern void sparc32_collect_fpregset (const struct regcache *regcache,
+extern void sparc32_collect_fpregset (const struct sparc_fpregmap *fpregmap,
+				      const struct regcache *regcache,
 				      int regnum, void *fpregs);
+
+extern int sparc_is_annulled_branch_insn (CORE_ADDR pc);
 
 /* Functions and variables exported from sparc-sol2-tdep.c.  */
 
 /* Register offsets for Solaris 2.  */
-extern const struct sparc_gregset sparc32_sol2_gregset;
+extern const struct sparc_gregmap sparc32_sol2_gregmap;
+extern const struct sparc_fpregmap sparc32_sol2_fpregmap;
 
-extern int sparc_sol2_pc_in_sigtramp (CORE_ADDR pc, char *name);
+extern int sparc_sol2_pc_in_sigtramp (CORE_ADDR pc, const char *name);
 
-extern char *sparc_sol2_static_transform_name (char *name);
+extern const char *sparc_sol2_static_transform_name (const char *name);
 
 extern void sparc32_sol2_init_abi (struct gdbarch_info info,
 				   struct gdbarch *gdbarch);
@@ -207,7 +241,7 @@ extern void sparc32_sol2_init_abi (struct gdbarch_info info,
 /* Functions and variables exported from sparcnbsd-tdep.c.  */
 
 /* Register offsets for NetBSD.  */
-extern const struct sparc_gregset sparc32nbsd_gregset;
+extern const struct sparc_gregmap sparc32nbsd_gregmap;
 
 /* Return the address of a system call's alternative return
    address.  */

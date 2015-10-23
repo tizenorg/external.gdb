@@ -1,7 +1,6 @@
 /* Disassembly display.
 
-   Copyright (C) 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2007, 2008, 2009,
-   2010 Free Software Foundation, Inc.
+   Copyright (C) 1998-2014 Free Software Foundation, Inc.
 
    Contributed by Hewlett-Packard Company.
 
@@ -28,7 +27,7 @@
 #include "value.h"
 #include "source.h"
 #include "disasm.h"
-#include "gdb_string.h"
+#include <string.h>
 #include "tui/tui.h"
 #include "tui/tui-data.h"
 #include "tui/tui-win.h"
@@ -38,6 +37,7 @@
 #include "tui/tui-file.h"
 #include "tui/tui-disasm.h"
 #include "progspace.h"
+#include "objfiles.h"
 
 #include "gdb_curses.h"
 
@@ -114,7 +114,7 @@ tui_find_disassembly_address (struct gdbarch *gdbarch, CORE_ADDR pc, int from)
     {
       CORE_ADDR last_addr;
       int pos;
-      struct minimal_symbol *msymbol;
+      struct bound_minimal_symbol msymbol;
               
       /* Find backward an address which is a symbol and for which
          disassembling from that address will fill completely the
@@ -124,14 +124,14 @@ tui_find_disassembly_address (struct gdbarch *gdbarch, CORE_ADDR pc, int from)
          new_low -= 1 * max_lines;
          msymbol = lookup_minimal_symbol_by_pc_section (new_low, 0);
 
-         if (msymbol)
-            new_low = SYMBOL_VALUE_ADDRESS (msymbol);
+         if (msymbol.minsym)
+            new_low = BMSYMBOL_VALUE_ADDRESS (msymbol);
          else
             new_low += 1 * max_lines;
 
          tui_disassemble (gdbarch, asm_lines, new_low, max_lines);
          last_addr = asm_lines[pos].addr;
-      } while (last_addr > pc && msymbol);
+      } while (last_addr > pc && msymbol.minsym);
 
       /* Scan forward disassembling one instruction at a time until
          the last visible instruction of the window matches the pc.
@@ -174,7 +174,7 @@ tui_set_disassem_content (struct gdbarch *gdbarch, CORE_ADDR pc)
   enum tui_status ret = TUI_FAILURE;
   int i;
   int offset = TUI_DISASM_WIN->detail.source_info.horizontal_offset;
-  int line_width, max_lines;
+  int max_lines;
   CORE_ADDR cur_pc;
   struct tui_gen_win_info *locator = tui_locator_win_info_ptr ();
   int tab_len = tui_default_tab_len ();
@@ -193,8 +193,8 @@ tui_set_disassem_content (struct gdbarch *gdbarch, CORE_ADDR pc)
   TUI_DISASM_WIN->detail.source_info.gdbarch = gdbarch;
   TUI_DISASM_WIN->detail.source_info.start_line_or_addr.loa = LOA_ADDRESS;
   TUI_DISASM_WIN->detail.source_info.start_line_or_addr.u.addr = pc;
-  cur_pc = (CORE_ADDR)
-    (((struct tui_win_element *) locator->content[0])->which_element.locator.addr);
+  cur_pc = (CORE_ADDR) (((struct tui_win_element *)
+			 locator->content[0])->which_element.locator.addr);
 
   max_lines = TUI_DISASM_WIN->generic.height - 2;	/* Account for
 							   hilite.  */
@@ -203,8 +203,6 @@ tui_set_disassem_content (struct gdbarch *gdbarch, CORE_ADDR pc)
   asm_lines = (struct tui_asm_line*) alloca (sizeof (struct tui_asm_line)
                                          * max_lines);
   memset (asm_lines, 0, sizeof (struct tui_asm_line) * max_lines);
-
-  line_width = TUI_DISASM_WIN->generic.width - 1;
 
   tui_disassemble (gdbarch, asm_lines, pc, max_lines);
 
@@ -262,7 +260,8 @@ tui_set_disassem_content (struct gdbarch *gdbarch, CORE_ADDR pc)
 
       /* See whether there is a breakpoint installed.  */
       src->has_break = (!src->is_exec_point
-			&& breakpoint_here_p (current_program_space->aspace, pc)
+			&& breakpoint_here_p (current_program_space->aspace,
+					      pc)
 			!= no_breakpoint_here);
 
       xfree (asm_lines[i].addr_string);
@@ -318,10 +317,10 @@ tui_show_disassem_and_update_source (struct gdbarch *gdbarch,
       if (sal.symtab)
 	{
 	  set_current_source_symtab_and_line (&sal);
-	  tui_update_locator_filename (sal.symtab->filename);
+	  tui_update_locator_fullname (symtab_to_fullname (sal.symtab));
 	}
       else
-	tui_update_locator_filename ("?");
+	tui_update_locator_fullname ("?");
     }
 
   return;
@@ -336,21 +335,22 @@ tui_get_begin_asm_address (struct gdbarch **gdbarch_p, CORE_ADDR *addr_p)
   CORE_ADDR addr;
 
   locator = tui_locator_win_info_ptr ();
-  element = &((struct tui_win_element *) locator->content[0])->which_element.locator;
+  element = &((struct tui_win_element *)
+	      locator->content[0])->which_element.locator;
 
   if (element->addr == 0)
     {
-      struct minimal_symbol *main_symbol;
+      struct bound_minimal_symbol main_symbol;
 
       /* Find address of the start of program.
          Note: this should be language specific.  */
       main_symbol = lookup_minimal_symbol ("main", NULL, NULL);
-      if (main_symbol == 0)
+      if (main_symbol.minsym == 0)
         main_symbol = lookup_minimal_symbol ("MAIN", NULL, NULL);
-      if (main_symbol == 0)
+      if (main_symbol.minsym == 0)
         main_symbol = lookup_minimal_symbol ("_start", NULL, NULL);
-      if (main_symbol)
-        addr = SYMBOL_VALUE_ADDRESS (main_symbol);
+      if (main_symbol.minsym)
+        addr = BMSYMBOL_VALUE_ADDRESS (main_symbol);
       else
         addr = 0;
     }
@@ -400,10 +400,12 @@ tui_vertical_disassem_scroll (enum tui_scroll_direction scroll_direction,
 
       pc = content[0]->which_element.source.line_or_addr.u.addr;
       num_to_scroll++;
-      dir = (scroll_direction == FORWARD_SCROLL) ? num_to_scroll : -num_to_scroll;
+      dir = (scroll_direction == FORWARD_SCROLL)
+	? num_to_scroll : -num_to_scroll;
 
       val.loa = LOA_ADDRESS;
       val.u.addr = tui_find_disassembly_address (gdbarch, pc, dir);
-      tui_update_source_window_as_is (TUI_DISASM_WIN, gdbarch, NULL, val, FALSE);
+      tui_update_source_window_as_is (TUI_DISASM_WIN, gdbarch,
+				      NULL, val, FALSE);
     }
 }

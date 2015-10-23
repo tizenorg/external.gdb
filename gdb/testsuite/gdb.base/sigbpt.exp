@@ -1,6 +1,6 @@
 # This testcase is part of GDB, the GNU debugger.
 
-# Copyright 2004, 2005, 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+# Copyright 2004-2014 Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -33,23 +33,13 @@ if [target_info exists gdb,nosignals] {
     continue
 }
 
-if $tracelevel {
-    strace $tracelevel
-}
 
+standard_testfile
 
-set testfile "sigbpt"
-set srcfile ${testfile}.c
-set binfile ${objdir}/${subdir}/${testfile}
-if { [gdb_compile "${srcdir}/${subdir}/${srcfile}" "${binfile}" executable {debug}] != "" } {
-    untested sigbpt.exp
+if {[prepare_for_testing $testfile.exp $testfile $srcfile debug]} {
+    untested $testfile.exp
     return -1
 }
-
-gdb_exit
-gdb_start
-gdb_reinitialize_dir $srcdir/$subdir
-gdb_load ${binfile}
 
 #
 # Run to `main' where we begin our tests.
@@ -86,7 +76,7 @@ gdb_test "break keeper"
 set bowler_addrs bowler
 set segv_addr none
 gdb_test {display/i $pc}
-gdb_test "advance *bowler" "bowler.*" "advance to the bowler"
+gdb_test "advance bowler" "bowler.*" "advance to the bowler"
 set test "stepping to fault"
 set signame "SIGSEGV"
 gdb_test_multiple "stepi" "$test" {
